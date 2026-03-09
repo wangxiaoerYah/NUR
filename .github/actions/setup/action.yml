@@ -1,0 +1,62 @@
+name: setup
+description: "缓存 CI 的前置环境 — 清磁盘 / 把域名钉到源站 IP 绕开 CDN / 写缓存凭据 / 装 nix / 装 attic 客户端"
+
+inputs:
+  token:
+    description: attic 的 token (本仓配的是只对 `nur` 缓存有 pull + push 权限的那把)
+    required: true
+  url:
+    description: 缓存服务地址 (带协议, 不含缓存名)
+    required: true
+  hosts_entry:
+    description: 钉进 /etc/hosts 的一行 (源站 IP + 域名); 公开仓不写死这些值, 由 secret 传
+    required: true
+  nix_config:
+    description: 传给 install-nix-action 的 extra_nix_config
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: free disk, pin origin (skip cdn)
+      shell: bash
+      env:
+        HOSTS_ENTRY: ${{ inputs.hosts_entry }}
+      run: |
+        set -euo pipefail
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/az /usr/lib/jvm
+        sudo docker system prune -af >/dev/null 2>&1 || true
+        sudo apt-get clean
+        echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
+        host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
+        getent hosts "$host" >/dev/null
+        echo "origin pinned for $host"
+        df -h / | tail -1
+
+    - name: netrc
+      shell: bash
+      env:
+        ATTIC_TOKEN: ${{ inputs.token }}
+        HOSTS_ENTRY: ${{ inputs.hosts_entry }}
+      run: |
+        set -euo pipefail
+        test -n "$ATTIC_TOKEN"
+        host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
+        sudo mkdir -p /etc/nix
+        umask 077
+        printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
+        sudo chmod 600 /etc/nix/netrc
+
+    - name: install nix
+      uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ github.token }}
+        extra_nix_config: ${{ inputs.nix_config }}
+
+    - name: install attic client
+      shell: bash
+      run: |
+        set -euo pipefail
+        nix build --show-trace --no-link --print-out-paths nixpkgs#attic-client > /tmp/attic-path
+        echo "attic $(cat /tmp/attic-path)/bin/attic"

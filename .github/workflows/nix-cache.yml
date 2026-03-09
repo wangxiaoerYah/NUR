@@ -1,0 +1,78 @@
+# 把本仓的字体包构建出来推进 attic 私有缓存 (缓存名由 `ATTIC_CACHE` 给出).
+#
+# 本仓是公开仓, 所以缓存地址 / 公钥 / token 一律走 secrets, 仓库里只有引用 (见 .github/actions/setup).
+# 只做构建与推送, 不跑 `nix flake check`.
+#
+# 每个架构各跑一遍: 字体包本身与架构无关 (`stdenvNoCC` + `fetchurl` + `unzip`/`p7zip`), 但解压工具与
+# 产物是逐架构的 store 路径, 所以两个架构都要推. aarch64 走 GitHub 的 arm runner.
+name: nix-cache
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".editorconfig"
+      - ".github/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64-linux
+            runner: ubuntu-24.04
+          - arch: aarch64-linux
+            runner: ubuntu-24.04-arm
+    env:
+      ATTIC_TOKEN: ${{ secrets.ATTIC_CI_TOKEN }}
+      ATTIC_URL: ${{ secrets.ATTIC_URL }}
+      ATTIC_CACHE: ${{ secrets.ATTIC_CACHE }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup
+        with:
+          token: ${{ secrets.ATTIC_CI_TOKEN }}
+          url: ${{ secrets.ATTIC_URL }}
+          hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+          nix_config: |
+            extra-experimental-features = nix-command flakes
+            extra-substituters = ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+            extra-trusted-public-keys = ${{ secrets.ATTIC_PUBLIC_KEY }}
+            netrc-file = /etc/nix/netrc
+
+      - name: build ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/roots
+          mapfile -t attrs < <(nix eval --json ".#packages.${{ matrix.arch }}" --apply builtins.attrNames | jq -r '.[]')
+          echo "packages: ${attrs[*]}"
+          test "${#attrs[@]}" -gt 0
+          nix build --keep-going --show-trace -o /tmp/roots "${attrs[@]/#/.#}"
+          ls -l /tmp/roots
+
+      - name: push ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test -n "$ATTIC_TOKEN"
+          ATTIC=$(cat /tmp/attic-path)/bin/attic
+          "$ATTIC" login pfm "$ATTIC_URL" "$ATTIC_TOKEN"
+          mapfile -t paths < <(for d in /tmp/roots/*; do readlink "$d"; done | sort -u)
+          printf '%s\n' "${paths[@]}"
+          "$ATTIC" push "pfm:$ATTIC_CACHE" "${paths[@]}"
+          df -h / | tail -1
