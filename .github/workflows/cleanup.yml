@@ -1,0 +1,31 @@
+name: cleanup
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cleanup
+  cancel-in-progress: false
+
+jobs:
+  delete-bot-branch:
+    name: delete bot branch
+    if: ${{ !github.event.pull_request.merged && github.event.pull_request.head.ref == 'bot/update-inputs' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: delete bot branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/heads/bot/update-inputs" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/bot/update-inputs"
+            echo "已删除 bot/update-inputs (PR 未合并)"
+          else
+            echo "bot/update-inputs 不存在, 无需删除"
+          fi

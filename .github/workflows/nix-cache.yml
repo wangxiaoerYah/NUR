@@ -1,0 +1,42 @@
+name: nix-cache
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".editorconfig"
+      - ".github/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    uses: ./.github/workflows/plan.yml
+    secrets:
+      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
+      substituter: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+
+  build:
+    name: build
+    needs: plan
+    if: ${{ needs.plan.outputs.matrix != '{"include":[]}' }}
+    uses: ./.github/workflows/build-push.yml
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+    secrets:
+      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
+      attic_url: ${{ secrets.ATTIC_URL }}
+      cache_name: ${{ secrets.ATTIC_CACHE }}
+      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+      substituters: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+      trusted_keys: ${{ secrets.ATTIC_PUBLIC_KEY }}

@@ -1,0 +1,77 @@
+name: setup
+description: "缓存 CI 的前置环境"
+
+inputs:
+  token:
+    description: "attic 的 token"
+    required: true
+  url:
+    description: "缓存服务地址 (带协议, 不含缓存名)"
+    required: true
+  hosts_entry:
+    description: "Hosts (源站 IP + 域名)"
+    required: true
+  substituters:
+    description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+    required: false
+    default: ""
+  trusted_keys:
+    description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: pin origin, write credentials
+      shell: bash
+      env:
+        ATTIC_TOKEN: ${{ inputs.token }}
+        ATTIC_URL: ${{ inputs.url }}
+        HOSTS_ENTRY: ${{ inputs.hosts_entry }}
+      run: |
+        set -euo pipefail
+        test -n "$ATTIC_TOKEN"
+        test -n "$ATTIC_URL"
+        test -n "$HOSTS_ENTRY"
+
+        host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
+        echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
+        getent hosts "$host" >/dev/null
+        echo "origin pinned for $host"
+
+        sudo mkdir -p /etc/nix
+        umask 077
+        printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
+        sudo chmod 600 /etc/nix/netrc
+
+        mkdir -p "$HOME/.config/attic"
+        umask 077
+        cat > "$HOME/.config/attic/config.toml" <<EOF
+        default-server = "ci"
+
+        [servers.ci]
+        endpoint = "${ATTIC_URL}"
+        token = "${ATTIC_TOKEN}"
+        EOF
+        chmod 600 "$HOME/.config/attic/config.toml"
+
+    - name: install nix
+      uses: NixOS/nix-installer-action@main
+      with:
+        extra-conf: |
+          extra-experimental-features = nix-command flakes
+          always-allow-substitutes = true
+          access-tokens = github.com=${{ github.token }}
+          download-attempts = 10
+          connect-timeout = 60
+          stalled-download-timeout = 2000
+          download-buffer-size = 33554432
+          http-connections = 32
+          max-substitution-jobs = 32
+          max-jobs = 16
+          min-free = 8589934592
+          max-free = 12884901888
+          extra-substituters = ${{ inputs.substituters }}
+          extra-trusted-public-keys = ${{ inputs.trusted_keys }}
+          netrc-file = /etc/nix/netrc

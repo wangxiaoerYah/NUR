@@ -1,0 +1,98 @@
+name: build-push
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        description: "json: {include: [{label, runner, installables, nix-flags?, extra-substituters?, extra-keys?}]}"
+        required: true
+        type: string
+      ref:
+        description: "要构建的分支/提交 (空 = 调用方的默认 ref)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      attic_token:
+        description: "attic 的 ci token (pull + push)"
+        required: true
+      attic_url:
+        description: "缓存服务地址 (带协议, 不含缓存名)"
+        required: true
+      cache_name:
+        description: "推送的目标缓存名"
+        required: true
+      hosts_entry:
+        description: "Hosts (源站 IP + 域名)"
+        required: true
+      substituters:
+        description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        required: false
+      trusted_keys:
+        description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    env:
+      INSTALLABLES: ${{ matrix.installables }}
+      NIX_FLAGS: ${{ matrix.nix-flags }}
+      CACHE: ci:${{ secrets.cache_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: jlumbroso/free-disk-space@v2
+
+      - uses: ./.github/actions/setup
+        with:
+          token: ${{ secrets.attic_token }}
+          url: ${{ secrets.attic_url }}
+          hosts_entry: ${{ secrets.hosts_entry }}
+          substituters: ${{ secrets.substituters }} ${{ matrix.extra-substituters }}
+          trusted_keys: ${{ secrets.trusted_keys }} ${{ matrix.extra-keys }}
+      - name: attic client
+        run: nix build nixpkgs#attic-client --no-link --print-out-paths > "$RUNNER_TEMP/attic-path"
+
+      - name: build and push
+        run: |
+          set -euo pipefail
+          ATTIC="$(cat "$RUNNER_TEMP/attic-path")/bin/attic"
+          rc=0
+
+          echo "::group::nix build"
+          # shellcheck disable=SC2086
+          nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
+            > "$RUNNER_TEMP/paths" || rc=$?
+          echo "::endgroup::"
+
+          if [ "$rc" = 0 ]; then
+            mapfile -t valid < <(grep -v '^$' "$RUNNER_TEMP/paths" || true)
+          else
+            # shellcheck disable=SC2086
+            mapfile -t valid < <(nix path-info --json --json-format 1 $NIX_FLAGS $INSTALLABLES \
+              | jq -r 'to_entries[] | select(.value != null) | .key' || true)
+          fi
+
+          if [ "${#valid[@]}" -gt 0 ]; then
+            echo "pushing ${#valid[@]} paths"
+            "$ATTIC" push "$CACHE" "${valid[@]}"
+          fi
+
+          mapfile -t inputs < <(nix flake archive --json \
+            | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
+          if [ "${#inputs[@]}" -gt 0 ]; then
+            "$ATTIC" push "$CACHE" "${inputs[@]}" || true
+          fi
+
+          df -h / | tail -1
+          exit "$rc"
