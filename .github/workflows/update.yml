@@ -1,0 +1,63 @@
+name: update
+
+on:
+  schedule:
+    - cron: "0 19 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: update
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-experimental-features = nix-command flakes
+            access-tokens = github.com=${{ github.token }}
+      - name: update and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          nix flake update
+
+          upd_attrs=$(nix eval --json ".#packages.x86_64-linux" --apply \
+            'ps: builtins.filter (n: ((builtins.getAttr n ps).passthru or {}) ? updateScript) (builtins.attrNames ps)')
+          for attr in $(echo "$upd_attrs" | jq -r '.[]'); do
+            echo "== updating $attr"
+            nix run ".#${attr}.passthru.updateScript"
+          done
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to do"
+            exit 0
+          fi
+
+          git commit -m "update inputs and packages"
+
+          if git ls-remote --exit-code origin bot/update-inputs >/dev/null 2>&1; then
+            git push --force origin HEAD:refs/heads/bot/update-inputs
+          else
+            git push origin HEAD:refs/heads/bot/update-inputs
+          fi
+
+          body="由 update workflow 生成. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow); 合并后主分支不再重复构建 (产物已在缓存)."
+          if gh pr view bot/update-inputs --json number >/dev/null 2>&1; then
+            gh pr edit bot/update-inputs --title "update inputs and packages" --body "$body"
+          else
+            gh pr create --base main --head bot/update-inputs --title "update inputs and packages" --body "$body"
+          fi
