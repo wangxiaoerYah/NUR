@@ -59,20 +59,29 @@ jobs:
       - name: build ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          rm -rf /tmp/roots
           mapfile -t attrs < <(nix eval --json ".#packages.${{ matrix.arch }}" --apply builtins.attrNames | jq -r '.[]')
           echo "packages: ${attrs[*]}"
           test "${#attrs[@]}" -gt 0
-          nix build --keep-going --show-trace -o /tmp/roots "${attrs[@]/#/.#}"
-          ls -l /tmp/roots
+          # 用 --print-out-paths 收产物: `-o <path>` 挂多个 installable 时只会给一个符号链接,
+          # 按 `<path>/*` 取路径会取空 —— attic 就变成"什么都没推"还退出 0.
+          nix build --no-link --keep-going --show-trace --print-out-paths "${attrs[@]/#/.#}" > /tmp/paths.txt
+          # 固定输出的源 (Windows 安装映像 / MiSans 整合包) 是构建输入, 不在产物的引用闭包里, 得单独推.
+          # 它挂在包的 passthru 上, 而 nix 只肯 build 派生或路径 (`found a set`), 所以取 outPath 拼进来.
+          for attr in "${attrs[@]}"; do
+            nix eval --raw ".#$attr.passthru.sources" \
+              --apply 'x: builtins.concatStringsSep "\n" (map (d: d.outPath) (builtins.attrValues x))' \
+              >> /tmp/paths.txt 2>/dev/null || true
+          done
+          sort -u -o /tmp/paths.txt /tmp/paths.txt
+          cat /tmp/paths.txt
 
       - name: push ${{ matrix.arch }}
         run: |
           set -euo pipefail
           test -n "$ATTIC_TOKEN"
+          mapfile -t paths < <(while read -r path; do [ -e "$path" ] && printf '%s\n' "$path"; done < /tmp/paths.txt)
+          test "${#paths[@]}" -gt 0
           ATTIC=$(cat /tmp/attic-path)/bin/attic
           "$ATTIC" login pfm "$ATTIC_URL" "$ATTIC_TOKEN"
-          mapfile -t paths < <(for d in /tmp/roots/*; do readlink "$d"; done | sort -u)
-          printf '%s\n' "${paths[@]}"
           "$ATTIC" push "pfm:$ATTIC_CACHE" "${paths[@]}"
           df -h / | tail -1

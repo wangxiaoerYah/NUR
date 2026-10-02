@@ -2,9 +2,7 @@
 final: prev:
 let
   lib = prev.lib.extend (
-    _final: prevAttrs: {
-      licenses = prevAttrs.licenses // (import (projectRoot + /lib/licenses.nix) { });
-    }
+    _final: prevAttrs: { licenses = prevAttrs.licenses // (import (projectRoot + /lib/licenses.nix) { }); }
   );
 
   packages = import (projectRoot + /lib/packages.nix) {
