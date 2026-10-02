@@ -1,4 +1,5 @@
 {
+  cascadia-code,
   lib,
   newScope,
   lndir,
@@ -72,6 +73,7 @@ let
 
     scope = {
       inherit
+        cascadia-code
         symbola
         windows-fonts
         wqy_microhei
