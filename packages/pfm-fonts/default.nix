@@ -9,11 +9,9 @@
   ...
 }:
 let
-  lib' = lib.extend (_final: prev: { licenses = prev.licenses // (import ../../lib/licenses.nix { }); });
+  inherit (lib) concatStringsSep makeScope packagesFromDirectoryRecursive;
 
-  inherit (lib') concatStringsSep makeScope packagesFromDirectoryRecursive;
-
-  inherit (import ../../lib/derivations.nix { lib = lib'; }) filterDerivations;
+  inherit (import ../../lib/derivations.nix { inherit lib; }) filterDerivations;
 
   link =
     {
@@ -84,7 +82,7 @@ let
 
     passthru = {
       inherit windows-fonts xiaomi-fonts;
-      microsoftPackages = lib'.filterAttrs (_: value: lib'.isDerivation value) windowsPackages;
+      microsoftPackages = lib.filterAttrs (_: value: lib.isDerivation value) windowsPackages;
 
       # 构建时下的大件 (固定输出): 它们是构建输入, 不在产物的引用闭包里, 推缓存时要单独带上.
       sources = {

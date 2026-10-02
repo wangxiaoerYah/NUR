@@ -31,10 +31,19 @@
         let
           lib = inputs.nixpkgs-stable.lib;
 
+          # scope 内层那些包 (windows/*) 的 `lib` 取自 pkgs (见 packages/pfm-fonts/default.nix),
+          # 而那两条字体许可不在 nixpkgs 的 lib.licenses 里, 所以扩展要挂在本 flake 自己的 pkgs 上.
           pkgs = import inputs.nixpkgs-stable {
             inherit system;
             config.allowUnfree = true;
-            overlays = [ self.overlays.default ];
+            overlays = [
+              (_final: prev: {
+                lib = prev.lib.extend (
+                  _p: prevAttrs: { licenses = prevAttrs.licenses // (import (projectRoot + /lib/licenses.nix) { }); }
+                );
+              })
+              self.overlays.default
+            ];
           };
 
           packages = import (projectRoot + /lib/packages.nix) {
@@ -73,7 +82,7 @@
         };
 
       flake = {
-        overlays.default = import (projectRoot + /overlays/default.nix) { inherit projectRoot; };
+        overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
         nixosModules.default = {
           nixpkgs.overlays = [ self.overlays.default ];
         };
