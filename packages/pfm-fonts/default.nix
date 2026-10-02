@@ -1,8 +1,10 @@
 {
   cascadia-code,
   lib,
+  nerd-fonts,
   newScope,
   lndir,
+  noto-fonts-color-emoji,
   stdenvNoCC,
   symbola,
   wqy_microhei,
@@ -74,12 +76,16 @@ let
     scope = {
       inherit
         cascadia-code
+        noto-fonts-color-emoji
         symbola
         windows-fonts
         wqy_microhei
         wqy_zenhei
         xiaomi-fonts
         ;
+
+      # Nerd 图标字形 (两种 family: `Symbols Nerd Font` / `Symbols Nerd Font Mono`).
+      nerd-fonts-symbols = nerd-fonts.symbols-only;
     };
 
     passthru = {
