@@ -84,7 +84,6 @@ let
         xiaomi-fonts
         ;
 
-      # Nerd 图标字形 (两种 family: `Symbols Nerd Font` / `Symbols Nerd Font Mono`).
       nerd-fonts-symbols = nerd-fonts.symbols-only;
     };
 
@@ -92,7 +91,6 @@ let
       inherit windows-fonts xiaomi-fonts;
       microsoftPackages = lib.filterAttrs (_: value: lib.isDerivation value) windowsPackages;
 
-      # 构建时下的大件 (固定输出): 它们是构建输入, 不在产物的引用闭包里, 推缓存时要单独带上.
       sources = {
         windows-fonts = windows-fonts.src;
         misans-global = xiaomiPackages.misans-global.src;

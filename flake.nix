@@ -5,7 +5,6 @@
     ## --- Nixpkgs ---
     nixpkgs-stable.url = "https://channels.nixos.org/nixos-26.05-small/nixexprs.tar.zst";
     nixpkgs-unstable.url = "https://channels.nixos.org/nixos-unstable-small/nixexprs.tar.zst";
-    ferron.url = "github:ferronweb/ferron/develop-3.x";
     ## --- Flake ---
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
@@ -13,6 +12,8 @@
     };
     ## --- Tools ---
     treefmt-nix.url = "github:numtide/treefmt-nix";
+    ## --- Apps ---
+    ferron.url = "github:ferronweb/ferron/develop-3.x";
   };
 
   outputs =
@@ -31,9 +32,6 @@
         { system, ... }:
         let
           lib = inputs.nixpkgs-stable.lib;
-
-          # scope 内层那些包 (windows/*) 的 `lib` 取自 pkgs (见 packages/pfm-fonts/default.nix),
-          # 而那两条字体许可不在 nixpkgs 的 lib.licenses 里, 所以扩展要挂在本 flake 自己的 pkgs 上.
           pkgs = import inputs.nixpkgs-stable {
             inherit system;
             config.allowUnfree = true;
@@ -54,7 +52,9 @@
         in
         {
           _module.args.pkgs = pkgs;
-          packages = packages.callAll (path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args));
+          packages = packages.callAll (
+            path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args)
+          );
 
           treefmt = {
             projectRootFile = "flake.nix";

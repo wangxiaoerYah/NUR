@@ -43,12 +43,8 @@ stdenvNoCC.mkDerivation {
 
   nativeBuildInputs = [ unzip ];
 
-  # 外层 zip 有两个顶层条目 (`MiSans Global _ALL/` 与 macOS 垃圾 `__MACOSX/`), stdenv 猜不出唯一
-  # 源码目录会直接报 "unpacker produced multiple directories"; 显式钉在这层.
   sourceRoot = ".";
 
-  # 外层 zip 只装内层 zip 与 macOS 垃圾; 内层的目录层级也不统一 (otf/ttf、OpenType/TrueType、
-  # static/otf、Font_Files/... 都有), 所以全部解开后按扩展名收, woff/woff2 不要.
   postUnpack = ''
     mkdir -p fonts
 
