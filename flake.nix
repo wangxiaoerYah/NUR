@@ -52,9 +52,7 @@
         in
         {
           _module.args.pkgs = pkgs;
-          packages = packages.callAll (
-            path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args)
-          );
+          packages = packages.callAll (path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args));
 
           treefmt = {
             projectRootFile = "flake.nix";
