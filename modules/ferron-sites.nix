@@ -7,12 +7,8 @@
 let
   cfg = config.pfm.ferron;
 
-  cdnHeader = {
-    cloudflare = "cf-connecting-ip";
-  };
-
   realIpFor =
-    site: if site.cdn == null || site.cdn == "none" then "{{remote.ip}}" else "{{request.header.${cdnHeader.${site.cdn}}}}";
+    site: if site.realIpHeader == null then "{{remote.ip}}" else "{{request.header.${lib.toLower site.realIpHeader}}}";
 
   quote = s: "\"" + lib.replaceStrings [ "\\" "\"" ] [ "\\\\" "\\\"" ] s + "\"";
 
@@ -37,6 +33,26 @@ let
     ++ (map (name: "header -${name}") headers.unset);
 
   siteNames = key: site: if site.host == null then [ key ] else lib.filter (n: n != "") (lib.splitString " " site.host);
+
+  renderProxy =
+    site: extra:
+    let
+      p = site.proxy;
+      upstreamFields =
+        lib.optional (p.upstreamLimit != null) "limit ${toString p.upstreamLimit}"
+        ++ lib.optional (p.upstreamIdleTimeout != null) "idle_timeout \"${p.upstreamIdleTimeout}\""
+        ++ lib.optional (p.upstreamConnectionTimeout != null) "connection_timeout \"${p.upstreamConnectionTimeout}\"";
+      upstreamBody = lib.concatStringsSep "\n" upstreamFields;
+      lines = [
+        ("upstream ${site.upstream}" + lib.optionalString (upstreamFields != [ ]) " {\n${indent 1 upstreamBody}\n}")
+      ]
+      ++ lib.optional (p.keepalive != null) "keepalive ${lib.boolToString p.keepalive}"
+      ++ lib.optional (p.http2 != null) "http2 ${lib.boolToString p.http2}"
+      ++ lib.optional (p.maxRetries != null) "max_retries_per_upstream ${toString p.maxRetries}"
+      ++ lib.optional (p.retryInterval != null) "retry_interval \"${p.retryInterval}\""
+      ++ lib.optional (extra != "") extra;
+    in
+    "proxy {\n${indent 1 (lib.concatStringsSep "\n" lines)}\n}";
 
   renderSite =
     site:
@@ -77,11 +93,9 @@ let
             file false
         }
       ''
-      ++ lib.optional cfg.dynamicCompressed "dynamic_compressed"
+      ++ lib.optional site.dynamicCompressed "dynamic_compressed"
       ++ headerLines headers
-      ++ lib.optional (site.upstream != null) (
-        "proxy ${site.upstream}" + lib.optionalString (proxyLines != "") " {\n${indent 1 proxyLines}\n}"
-      )
+      ++ lib.optional (site.upstream != null) (renderProxy site proxyLines)
       ++ lib.optional (site.timeout != null) ''
         http {
             timeout "${site.timeout}"
@@ -103,17 +117,24 @@ let
     '') (siteNames key site)
   ) (builtins.attrNames cfg.sites);
 
-  globalContent = ''
-    log /var/log/ferron/access.log {
-        access_log_rotate_size 10485760
-        access_log_rotate_keep 7
-    }
-    error_log /var/log/ferron/error.log {
-        error_log_rotate_size 10485760
-        error_log_rotate_keep 7
-    }
-  ''
-  + cfg.globalConfig;
+  globalContent =
+    lib.optionalString cfg.disableHttpPort "default_http_port false\n"
+    + lib.optionalString (cfg.proxyConcurrentConns != null) "concurrent_conns ${toString cfg.proxyConcurrentConns}\n"
+    + ''
+      http {
+          protocols h1 h2 h3
+          timeout "${cfg.timeout}"
+      }
+      log /var/log/ferron/access.log {
+          access_log_rotate_size 10485760
+          access_log_rotate_keep 7
+      }
+      error_log /var/log/ferron/error.log {
+          error_log_rotate_size 10485760
+          error_log_rotate_keep 7
+      }
+    ''
+    + cfg.globalConfig;
 
   confText = ''
     {
@@ -135,7 +156,27 @@ in
 
     dynamicCompressed = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
+    };
+
+    disableHttpPort = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+    };
+
+    timeout = lib.mkOption {
+      type = lib.types.str;
+      default = "30m";
+    };
+
+    proxyConcurrentConns = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+    };
+
+    proxyUpstreamLimit = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
     };
 
     globalConfig = lib.mkOption {
@@ -160,6 +201,36 @@ in
               type = lib.types.nullOr lib.types.str;
               default = null;
             };
+            proxy = {
+              keepalive = lib.mkOption {
+                type = lib.types.nullOr lib.types.bool;
+                default = true;
+              };
+              http2 = lib.mkOption {
+                type = lib.types.nullOr lib.types.bool;
+                default = false;
+              };
+              maxRetries = lib.mkOption {
+                type = lib.types.nullOr lib.types.int;
+                default = 1;
+              };
+              retryInterval = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+              };
+              upstreamLimit = lib.mkOption {
+                type = lib.types.nullOr lib.types.int;
+                default = cfg.proxyUpstreamLimit;
+              };
+              upstreamIdleTimeout = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = "60s";
+              };
+              upstreamConnectionTimeout = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = "2s";
+              };
+            };
             root = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
@@ -168,18 +239,17 @@ in
               type = lib.types.nullOr (lib.types.listOf lib.types.str);
               default = null;
             };
-            cdn = lib.mkOption {
-              type = lib.types.nullOr (
-                lib.types.enum [
-                  "none"
-                  "cloudflare"
-                ]
-              );
+            realIpHeader = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9-]+");
               default = null;
             };
             noindex = lib.mkOption {
               type = lib.types.bool;
               default = false;
+            };
+            dynamicCompressed = lib.mkOption {
+              type = lib.types.bool;
+              default = cfg.dynamicCompressed;
             };
             secureHeaders = lib.mkOption {
               type = lib.types.bool;
