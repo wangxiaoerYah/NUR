@@ -45,7 +45,10 @@ jobs:
           hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
           nix_config: |
             extra-experimental-features = nix-command flakes
-            download-attempts = 10
+            download-attempts = 12
+            connect-timeout = 60
+            stalled-download-timeout = 2000
+            download-buffer-size = 33554432
             extra-substituters = ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
             extra-trusted-public-keys = ${{ secrets.ATTIC_PUBLIC_KEY }}
             netrc-file = /etc/nix/netrc
