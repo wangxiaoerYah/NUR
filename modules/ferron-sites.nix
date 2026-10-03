@@ -13,7 +13,16 @@ let
   };
 
   realIpFor =
-    site: if site.cdn == null || site.cdn == "none" then "{{remote.ip}}" else "{{request.header.${cdnHeader.${site.cdn}}}";
+    site: if site.cdn == null || site.cdn == "none" then "{{remote.ip}}" else "{{request.header.${cdnHeader.${site.cdn}}}}";
+
+  quote = s: "\"" + lib.replaceStrings [ "\\" "\"" ] [ "\\\\" "\\\"" ] s + "\"";
+
+  indent =
+    level: text:
+    let
+      pad = lib.concatStrings (lib.replicate level "    ");
+    in
+    pad + lib.replaceStrings [ "\n" ] [ "\n${pad}" ] text;
 
   baseSecureHeaders = {
     X-Content-Type-Options = "nosniff";
@@ -22,44 +31,25 @@ let
     X-XSS-Protection = "1; mode=block";
   };
 
-  globalConfig = ''
-    log /var/log/ferron/access.log {
-        access_log_rotate_size 10485760
-        access_log_rotate_keep 7
-    }
-    error_log /var/log/ferron/error.log {
-        error_log_rotate_size 10485760
-        error_log_rotate_keep 7
-    }
-  ''
-  + lib.optionalString cfg.dynamicCompressed "dynamic_compressed\n"
-  + cfg.globalConfig;
+  headerLines =
+    headers:
+    (lib.mapAttrsToList (name: value: "header ${name} ${quote value}") headers.set)
+    ++ (lib.mapAttrsToList (name: value: "header +${name} ${quote value}") headers.add)
+    ++ (map (name: "header -${name}") headers.unset);
+
+  siteNames = key: site: if site.host == null then [ key ] else lib.filter (n: n != "") (lib.splitString " " site.host);
 
   renderSite =
     site:
     let
       realIp = realIpFor site;
-      proxyExtraConfig = lib.concatStrings (
+      proxyLines =
         lib.optionalString (site.upstream != null) ''
           request_header X-Real-IP "${realIp}"
           request_header X-Forwarded-For "${realIp}"
           request_header X-Forwarded-Proto "https"
         ''
-        + site.proxyExtraConfig
-      );
-    in
-    {
-      root = site.root;
-      index = site.index;
-      proxy = site.upstream;
-      inherit proxyExtraConfig;
-      spaFallback = site.spaFallback;
-      httpsRedirect = site.httpsRedirect;
-      tls = {
-        enable = if site.tlsEnable == null then site.tlsCert != null else site.tlsEnable;
-        cert = site.tlsCert;
-        key = site.tlsKey;
-      };
+        + site.proxyExtraConfig;
       headers = {
         set =
           (lib.optionalAttrs site.secureHeaders baseSecureHeaders)
@@ -74,21 +64,66 @@ let
           ]
           ++ site.headers.unset;
       };
-      config = lib.concatStringsSep "\n" (
-        lib.optional (site.timeout != null) ''
-          http {
-              timeout "${site.timeout}"
-          }
-        ''
-        ++ [ site.config ]
-      );
-    };
+    in
+    lib.concatStringsSep "\n" (
+      lib.optional (site.tlsEnable == false || (site.tlsCert == null && site.tlsEnable == null)) "tls false"
+      ++ lib.optional (site.tlsCert != null && site.tlsKey != null) "tls ${site.tlsCert} ${site.tlsKey}"
+      ++ lib.optional (site.httpsRedirect != null) "https_redirect ${lib.boolToString site.httpsRedirect}"
+      ++ lib.optional (site.root != null) "root ${site.root}"
+      ++ lib.optional (site.index != null) "index ${lib.concatStringsSep " " site.index}"
+      ++ lib.optional site.spaFallback ''
+        rewrite r"^/.*" "/" {
+            last
+            directory false
+            file false
+        }
+      ''
+      ++ lib.optional cfg.dynamicCompressed "dynamic_compressed"
+      ++ headerLines headers
+      ++ lib.optional (site.upstream != null) (
+        "proxy ${site.upstream}" + lib.optionalString (proxyLines != "") " {\n${indent 1 proxyLines}\n}"
+      )
+      ++ lib.optional (site.timeout != null) ''
+        http {
+            timeout "${site.timeout}"
+        }
+      ''
+      ++ lib.optional (site.config != "") site.config
+    );
 
-  siteNames = key: site: if site.host == null then [ key ] else lib.filter (n: n != "") (lib.splitString " " site.host);
+  siteBlocks = lib.concatMap (
+    key:
+    let
+      site = cfg.sites.${key};
+      body = renderSite site;
+    in
+    map (name: ''
+      ${name} {
+      ${indent 1 body}
+      }
+    '') (siteNames key site)
+  ) (builtins.attrNames cfg.sites);
 
-  hostDefs = lib.flatten (
-    lib.mapAttrsToList (key: site: map (name: { ${name} = renderSite site; }) (siteNames key site)) cfg.sites
-  );
+  globalContent = ''
+    log /var/log/ferron/access.log {
+        access_log_rotate_size 10485760
+        access_log_rotate_keep 7
+    }
+    error_log /var/log/ferron/error.log {
+        error_log_rotate_size 10485760
+        error_log_rotate_keep 7
+    }
+  ''
+  + cfg.globalConfig;
+
+  confText = ''
+    {
+    ${indent 1 globalContent}
+    }
+
+    ${lib.concatStringsSep "\n" siteBlocks}
+  ''
+  + lib.optionalString (cfg.extraConfig != "") "\n${cfg.extraConfig}\n";
 in
 {
   options.pfm.ferron = {
@@ -102,11 +137,6 @@ in
     dynamicCompressed = lib.mkOption {
       type = lib.types.bool;
       default = true;
-    };
-
-    keepDefaultVhost = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
     };
 
     globalConfig = lib.mkOption {
@@ -162,11 +192,11 @@ in
               default = null;
             };
             tlsCert = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
+              type = lib.types.nullOr lib.types.path;
               default = null;
             };
             tlsKey = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
+              type = lib.types.nullOr lib.types.path;
               default = null;
             };
             httpsRedirect = lib.mkOption {
@@ -213,11 +243,9 @@ in
   config = lib.mkIf cfg.enable {
     services.ferron = {
       enable = true;
-      inherit (cfg) package extraConfig;
-      inherit globalConfig;
-      hosts = lib.mkMerge hostDefs;
+      inherit (cfg) package;
+      openFirewall = false;
+      configFile = pkgs.writeText "ferron.conf" confText;
     };
-
-    services.ferron.hosts."*:80".config = lib.mkIf (!cfg.keepDefaultVhost) (lib.mkForce "");
   };
 }
