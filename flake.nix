@@ -5,6 +5,7 @@
     ## --- Nixpkgs ---
     nixpkgs-stable.url = "https://channels.nixos.org/nixos-26.05-small/nixexprs.tar.zst";
     nixpkgs-unstable.url = "https://channels.nixos.org/nixos-unstable-small/nixexprs.tar.zst";
+    ferron.url = "github:ferronweb/ferron/develop-3.x";
     ## --- Flake ---
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
@@ -53,7 +54,7 @@
         in
         {
           _module.args.pkgs = pkgs;
-          packages = packages.callAll pkgs.callPackage;
+          packages = packages.callAll (path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args));
 
           treefmt = {
             projectRootFile = "flake.nix";
@@ -83,8 +84,17 @@
 
       flake = {
         overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
-        nixosModules.default = {
-          nixpkgs.overlays = [ self.overlays.default ];
+        nixosModules = {
+          default = {
+            nixpkgs.overlays = [ self.overlays.default ];
+          };
+          ferron = inputs.ferron.nixosModules.default;
+          ferron-sites = {
+            imports = [
+              inputs.ferron.nixosModules.default
+              (import (projectRoot + /modules/ferron-sites.nix))
+            ];
+          };
         };
       };
     };
