@@ -9,7 +9,6 @@ let
 
   cdnHeader = {
     cloudflare = "cf-connecting-ip";
-    edgeone = "eo-connecting-ip";
   };
 
   realIpFor =
@@ -174,7 +173,6 @@ in
                 lib.types.enum [
                   "none"
                   "cloudflare"
-                  "edgeone"
                 ]
               );
               default = null;
