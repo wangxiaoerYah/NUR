@@ -12,8 +12,6 @@
     };
     ## --- Tools ---
     treefmt-nix.url = "github:numtide/treefmt-nix";
-    ## --- Apps ---
-    ferron.url = "github:ferronweb/ferron/develop-3.x";
   };
 
   outputs =
@@ -52,7 +50,7 @@
         in
         {
           _module.args.pkgs = pkgs;
-          packages = packages.callAll (path: args: pkgs.callPackage path ({ inherit (inputs) ferron; } // args));
+          packages = packages.callAll pkgs.callPackage;
 
           treefmt = {
             projectRootFile = "flake.nix";
@@ -85,13 +83,6 @@
         nixosModules = {
           default = {
             nixpkgs.overlays = [ self.overlays.default ];
-          };
-          ferron = inputs.ferron.nixosModules.default;
-          ferron-sites = {
-            imports = [
-              inputs.ferron.nixosModules.default
-              (import (projectRoot + /modules/ferron-sites.nix))
-            ];
           };
         };
       };
