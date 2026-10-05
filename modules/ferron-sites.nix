@@ -7,9 +7,6 @@
 let
   cfg = config.pfm.ferron;
 
-  realIpFor =
-    site: if site.realIpHeader == null then "{{remote.ip}}" else "{{request.header.${lib.toLower site.realIpHeader}}}";
-
   quote = s: "\"" + lib.replaceStrings [ "\\" "\"" ] [ "\\\\" "\\\"" ] s + "\"";
 
   indent =
@@ -57,14 +54,6 @@ let
   renderSite =
     site:
     let
-      realIp = realIpFor site;
-      proxyLines =
-        lib.optionalString (site.upstream != null) ''
-          request_header X-Real-IP "${realIp}"
-          request_header X-Forwarded-For "${realIp}"
-          request_header X-Forwarded-Proto "https"
-        ''
-        + site.proxyExtraConfig;
       headers = {
         set =
           (lib.optionalAttrs site.secureHeaders baseSecureHeaders)
@@ -95,7 +84,7 @@ let
       ''
       ++ lib.optional site.dynamicCompressed "dynamic_compressed"
       ++ headerLines headers
-      ++ lib.optional (site.upstream != null) (renderProxy site proxyLines)
+      ++ lib.optional (site.upstream != null) (renderProxy site site.proxyExtraConfig)
       ++ lib.optional (site.timeout != null) ''
         http {
             timeout "${site.timeout}"
@@ -117,14 +106,19 @@ let
     '') (siteNames key site)
   ) (builtins.attrNames cfg.sites);
 
+  httpBlock =
+    "http {\n"
+    + indent 1 (
+      lib.concatStringsSep "\n" ([ "protocols h1 h2 h3" ] ++ lib.optional (cfg.timeout != null) ''timeout "${cfg.timeout}"'')
+    )
+    + "\n}";
+
   globalContent =
     lib.optionalString cfg.disableHttpPort "default_http_port false\n"
     + lib.optionalString (cfg.proxyConcurrentConns != null) "concurrent_conns ${toString cfg.proxyConcurrentConns}\n"
+    + httpBlock
+    + "\n"
     + ''
-      http {
-          protocols h1 h2 h3
-          timeout "${cfg.timeout}"
-      }
       log /var/log/ferron/access.log {
           access_log_rotate_size 10485760
           access_log_rotate_keep 7
@@ -165,8 +159,8 @@ in
     };
 
     timeout = lib.mkOption {
-      type = lib.types.str;
-      default = "30m";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
     };
 
     proxyConcurrentConns = lib.mkOption {
@@ -237,10 +231,6 @@ in
             };
             index = lib.mkOption {
               type = lib.types.nullOr (lib.types.listOf lib.types.str);
-              default = null;
-            };
-            realIpHeader = lib.mkOption {
-              type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9-]+");
               default = null;
             };
             noindex = lib.mkOption {
