@@ -3,14 +3,38 @@
 
   inputs = {
     ## --- Nixpkgs ---
-    nixpkgs-stable.url = "https://channels.nixos.org/nixos-26.05-small/nixexprs.tar.zst";
+    nixpkgs-stable.url = "https://channels.nixos.org/nixos-unstable-small/nixexprs.tar.zst";
     nixpkgs-unstable.url = "https://channels.nixos.org/nixos-unstable-small/nixexprs.tar.zst";
     ## --- Flake ---
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
       inputs.nixpkgs-lib.follows = "nixpkgs-stable";
     };
+    ## --- Base ---
+    preservation.url = "github:nix-community/preservation";
+    home-manager = {
+      # 临时切主线
+      url = "github:nix-community/home-manager/master";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
+    ## --- Nur ---
+    nur.url = "github:nix-community/NUR";
+    ## --- Applications ---
+    nix-index-database = {
+      url = "github:nix-community/nix-index-database";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
+    nixvim = {
+      url = "github:nix-community/nixvim";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+      inputs.flake-parts.follows = "flake-parts";
+    };
+
     ## --- Tools ---
+    agenix = {
+      url = "github:ryantm/agenix";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
     colmena = {
       url = "github:nix-community/colmena";
       inputs = {
@@ -27,6 +51,19 @@
       inputs.nixpkgs.follows = "nixpkgs-stable";
     };
     treefmt-nix.url = "github:numtide/treefmt-nix";
+
+    ## --- Framework consumers ---
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
+    nix-on-droid = {
+      url = "github:nix-community/nix-on-droid";
+      inputs = {
+        nixpkgs.follows = "nixpkgs-stable";
+        home-manager.follows = "home-manager";
+      };
+    };
   };
 
   outputs =
@@ -85,33 +122,11 @@
             packages = packagesDir.callAll callPkg;
             images = imagesDir.callAll pkgs.callPackage;
 
-            treefmt = {
-              projectRootFile = "flake.nix";
-              programs.nixfmt.enable = true;
-              programs.nixfmt.package = pkgs.nixfmt;
-              programs.nixfmt.strict = true;
-              programs.nixfmt.width = 120;
-              programs.shfmt.enable = true;
-              programs.shfmt.indent_size = 2;
-              programs.shellcheck.enable = true;
-              settings.formatter.shellcheck.options = [
-                "-s"
-                "bash"
-              ];
-              programs.taplo.enable = true;
-              programs.prettier.enable = true;
-              programs.prettier.package = pkgs.prettier;
-              programs.prettier.settings = {
-                tabWidth = 2;
-                useTabs = false;
-                printWidth = 120;
-              };
-              programs.just.enable = true;
-              programs.fish_indent.enable = true;
-            };
+            treefmt = import (projectRoot + /framework/treefmt-default.nix) { inherit pkgs; };
           };
 
         flake = {
+          lib.mkFleet = import (projectRoot + /lib/mkFleet.nix) { inherit inputs; };
           overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
           nixosModules = {
             colmena = inputs.colmena.nixosModules.deploymentOptions;

@@ -1,4 +1,4 @@
-{ ... }: {
+_: {
   microsoft-software-license = {
     free = false;
     fullName = "Microsoft Software License Terms";
