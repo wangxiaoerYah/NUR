@@ -11,6 +11,13 @@
       inputs.nixpkgs-lib.follows = "nixpkgs-stable";
     };
     ## --- Tools ---
+    colmena = {
+      url = "github:nix-community/colmena";
+      inputs = {
+        nixpkgs.follows = "nixpkgs-unstable";
+        stable.follows = "nixpkgs-stable";
+      };
+    };
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
@@ -63,10 +70,11 @@
               inherit lib;
               dir = projectRoot + /images;
             };
+            callPkg = lib.callPackageWith (pkgs // { inherit inputs; });
           in
           {
             _module.args.pkgs = pkgs;
-            packages = packagesDir.callAll pkgs.callPackage;
+            packages = packagesDir.callAll callPkg;
             images = imagesDir.callAll pkgs.callPackage;
 
             treefmt = {
@@ -98,6 +106,7 @@
         flake = {
           overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
           nixosModules = {
+            colmena = inputs.colmena.nixosModules.deploymentOptions;
             default = {
               nixpkgs.overlays = [ self.overlays.default ];
             };
