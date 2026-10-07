@@ -24,6 +24,7 @@ in
 dockerTools.buildLayeredImage {
   name = "ghcr.io/wangxiaoeryah/nur-bot";
   tag = "main";
+  includeNixDB = true;
   contents = [
     bot
     cacert
