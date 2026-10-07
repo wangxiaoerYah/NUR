@@ -1,0 +1,104 @@
+name: build-push
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        description: "json: {include: [{label, runner, installables, nix-flags?, extra-substituters?, extra-keys?}]}"
+        required: true
+        type: string
+      batch_size:
+        description: "每次 nix build 合并的 installable 数 (也即每次 push 的粒度)"
+        required: false
+        type: number
+        default: 3
+    secrets:
+      attic_token:
+        description: "attic 的 ci token (pull + push)"
+        required: true
+      attic_url:
+        description: "缓存服务地址 (带协议, 不含缓存名)"
+        required: true
+      cache_name:
+        description: "推送的目标缓存名"
+        required: true
+      hosts_entry:
+        description: "钉进 /etc/hosts 的一行 (源站 IP + 域名)"
+        required: true
+      substituters:
+        description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        required: false
+      trusted_keys:
+        description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    env:
+      ATTIC_TOKEN: ${{ secrets.attic_token }}
+      ATTIC_URL: ${{ secrets.attic_url }}
+      CACHE_NAME: ${{ secrets.cache_name }}
+      INSTALLABLES: ${{ matrix.installables }}
+      NIX_FLAGS: ${{ matrix.nix-flags }}
+      BATCH: ${{ inputs.batch_size }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: wangxiaoerYah/NUR/.github/actions/setup@main
+        with:
+          token: ${{ secrets.attic_token }}
+          url: ${{ secrets.attic_url }}
+          hosts_entry: ${{ secrets.hosts_entry }}
+          nix_config: |
+            extra-experimental-features = nix-command flakes
+            download-attempts = 10
+            connect-timeout = 60
+            stalled-download-timeout = 2000
+            download-buffer-size = 33554432
+            extra-substituters = ${{ secrets.substituters }} ${{ matrix.extra-substituters }}
+            extra-trusted-public-keys = ${{ secrets.trusted_keys }} ${{ matrix.extra-keys }}
+            netrc-file = /etc/nix/netrc
+
+      - name: build and push
+        run: |
+          set -euo pipefail
+          ATTIC=$(cat /tmp/attic-path)/bin/attic
+          "$ATTIC" login ci "$ATTIC_URL" "$ATTIC_TOKEN"
+          bad=0
+          n=0
+          group=""
+          flush() {
+            [ -n "$group" ] || return 0
+            echo "::group::build$group"
+            set +e
+            # shellcheck disable=SC2086
+            nix build --keep-going --show-trace --print-out-paths $NIX_FLAGS $group > /tmp/batch-paths.txt
+            rc=$?
+            set -e
+            echo "::endgroup::"
+            [ "$rc" = 0 ] || bad=1
+            mapfile -t batch < <(grep -v '^$' /tmp/batch-paths.txt || true)
+            if [ "${#batch[@]}" -gt 0 ]; then
+              "$ATTIC" push "ci:$CACHE_NAME" "${batch[@]}"
+            fi
+            avail=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+            if [ "${avail:-0}" -lt 20 ]; then nix store gc --max 12G || true; fi
+            df -h / | tail -1
+            group=""
+          }
+          for i in $INSTALLABLES; do
+            group="$group $i"
+            n=$((n + 1))
+            if [ $((n % BATCH)) -eq 0 ]; then flush; fi
+          done
+          flush
+          test "$bad" = 0

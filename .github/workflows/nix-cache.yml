@@ -19,62 +19,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64-linux
-            runner: ubuntu-24.04
-          - arch: aarch64-linux
-            runner: ubuntu-24.04-arm
-    env:
-      ATTIC_TOKEN: ${{ secrets.ATTIC_CI_TOKEN }}
-      ATTIC_URL: ${{ secrets.ATTIC_URL }}
-      ATTIC_CACHE: ${{ secrets.ATTIC_CACHE }}
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
         with:
-          token: ${{ secrets.ATTIC_CI_TOKEN }}
-          url: ${{ secrets.ATTIC_URL }}
-          hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
-          nix_config: |
+          github_access_token: ${{ github.token }}
+          extra_nix_config: |
             extra-experimental-features = nix-command flakes
-            download-attempts = 12
-            connect-timeout = 60
-            stalled-download-timeout = 2000
-            download-buffer-size = 33554432
-            extra-substituters = ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
-            extra-trusted-public-keys = ${{ secrets.ATTIC_PUBLIC_KEY }}
-            netrc-file = /etc/nix/netrc
-
-      - name: build ${{ matrix.arch }}
+      - id: m
         run: |
           set -euo pipefail
-          mapfile -t attrs < <(nix eval --json ".#packages.${{ matrix.arch }}" --apply builtins.attrNames | jq -r '.[]')
-          echo "packages: ${attrs[*]}"
-          test "${#attrs[@]}" -gt 0
-          nix build --no-link --keep-going --show-trace --print-out-paths "${attrs[@]/#/.#}" > /tmp/paths.txt
-          for attr in "${attrs[@]}"; do
-            nix eval --raw ".#$attr.passthru.sources" \
-              --apply 'x: builtins.concatStringsSep "\n" (map (d: d.outPath) (builtins.attrValues x))' \
-              >> /tmp/paths.txt 2>/dev/null || true
+          entries=()
+          for arch in x86_64-linux aarch64-linux; do
+            installables=$(nix eval --json ".#packages.$arch" --apply builtins.attrNames | jq -r '.[]' | sed 's|^|.#|' | tr '\n' ' ')
+            [ -n "$installables" ] || continue
+            runner=$([ "$arch" = x86_64-linux ] && echo ubuntu-latest || echo ubuntu-26.04-arm)
+            entries+=("$(jq -cn --arg i "$installables" --arg l "$arch" --arg r "$runner" '{label:$l, runner:$r, installables:$i}')")
           done
-          sort -u -o /tmp/paths.txt /tmp/paths.txt
-          cat /tmp/paths.txt
+          test "${#entries[@]}" -gt 0
+          matrix=$(IFS=,; printf '{include:[%s]}' "${entries[*]}")
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$matrix"
 
-      - name: push ${{ matrix.arch }}
-        run: |
-          set -euo pipefail
-          test -n "$ATTIC_TOKEN"
-          mapfile -t paths < <(while read -r path; do [ -e "$path" ] && printf '%s\n' "$path"; done < /tmp/paths.txt)
-          test "${#paths[@]}" -gt 0
-          ATTIC=$(cat /tmp/attic-path)/bin/attic
-          "$ATTIC" login pfm "$ATTIC_URL" "$ATTIC_TOKEN"
-          "$ATTIC" push "pfm:$ATTIC_CACHE" "${paths[@]}"
-          df -h / | tail -1
+  build:
+    name: build
+    needs: plan
+    if: ${{ needs.plan.outputs.matrix != '' }}
+    uses: ./.github/workflows/build-push.yml
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+    secrets:
+      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
+      attic_url: ${{ secrets.ATTIC_URL }}
+      cache_name: ${{ secrets.ATTIC_CACHE }}
+      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+      substituters: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+      trusted_keys: ${{ secrets.ATTIC_PUBLIC_KEY }}
