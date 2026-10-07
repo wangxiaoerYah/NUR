@@ -11,11 +11,6 @@ on:
       - "flake.lock"
       - ".github/workflows/images.yml"
   workflow_dispatch:
-    inputs:
-      clean_keep_versions:
-        description: "每个镜像至少保留的版本数 (只清未打 tag 的)"
-        required: false
-        default: "3"
 
 permissions:
   contents: read
@@ -87,7 +82,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.packages) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: delete untagged versions
         if: ${{ !matrix.skip }}
@@ -95,5 +90,5 @@ jobs:
         with:
           package-name: ${{ matrix.package }}
           package-type: container
-          min-versions-to-keep: ${{ inputs.clean_keep_versions || '3' }}
+          min-versions-to-keep: 3
           delete-only-untagged-versions: "true"
