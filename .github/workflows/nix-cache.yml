@@ -9,6 +9,14 @@ on:
       - ".gitignore"
       - ".editorconfig"
       - ".github/**"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".editorconfig"
+      - ".github/**"
   workflow_dispatch:
 
 permissions:
