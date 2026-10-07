@@ -19,72 +19,90 @@
     let
       projectRoot = ./.;
     in
-    flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [ inputs.treefmt-nix.flakeModule ];
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-      ];
-
-      perSystem =
-        { system, ... }:
-        let
-          lib = inputs.nixpkgs-stable.lib;
-          pkgs = import inputs.nixpkgs-stable {
-            inherit system;
-            config.allowUnfree = true;
-            overlays = [
-              (_final: prev: {
-                lib = prev.lib.extend (
-                  _p: prevAttrs: { licenses = prevAttrs.licenses // (import (projectRoot + /lib/licenses.nix) { }); }
-                );
-              })
-              self.overlays.default
-            ];
-          };
-
-          packages = import (projectRoot + /lib/packages.nix) {
-            inherit lib;
-            dir = projectRoot + /packages;
-          };
-        in
-        {
-          _module.args.pkgs = pkgs;
-          packages = packages.callAll pkgs.callPackage;
-
-          treefmt = {
-            projectRootFile = "flake.nix";
-            programs.nixfmt.enable = true;
-            programs.nixfmt.package = pkgs.nixfmt;
-            programs.nixfmt.strict = true;
-            programs.nixfmt.width = 120;
-            programs.shfmt.enable = true;
-            programs.shfmt.indent_size = 2;
-            programs.shellcheck.enable = true;
-            settings.formatter.shellcheck.options = [
-              "-s"
-              "bash"
-            ];
-            programs.taplo.enable = true;
-            programs.prettier.enable = true;
-            programs.prettier.package = pkgs.prettier;
-            programs.prettier.settings = {
-              tabWidth = 2;
-              useTabs = false;
-              printWidth = 120;
+    flake-parts.lib.mkFlake { inherit inputs; } (
+      { lib, flake-parts-lib, ... }: {
+        imports = [
+          inputs.treefmt-nix.flakeModule
+          (flake-parts-lib.mkTransposedPerSystemModule {
+            name = "images";
+            file = ./flake.nix;
+            option = lib.mkOption {
+              type = lib.types.attrsOf lib.types.package;
+              default = { };
             };
-            programs.just.enable = true;
-            programs.fish_indent.enable = true;
-          };
-        };
+          })
+        ];
+        systems = [
+          "x86_64-linux"
+          "aarch64-linux"
+        ];
 
-      flake = {
-        overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
-        nixosModules = {
-          default = {
-            nixpkgs.overlays = [ self.overlays.default ];
+        perSystem =
+          { system, ... }:
+          let
+            lib = inputs.nixpkgs-stable.lib;
+            pkgs = import inputs.nixpkgs-stable {
+              inherit system;
+              config.allowUnfree = true;
+              overlays = [
+                (_final: prev: {
+                  lib = prev.lib.extend (
+                    _p: prevAttrs: { licenses = prevAttrs.licenses // (import (projectRoot + /lib/licenses.nix) { }); }
+                  );
+                })
+                self.overlays.default
+              ];
+            };
+
+            autoCall = import (projectRoot + /lib/auto-call.nix);
+            packages = autoCall {
+              inherit lib;
+              dir = projectRoot + /packages;
+            };
+            images = autoCall {
+              inherit lib;
+              dir = projectRoot + /images;
+            };
+          in
+          {
+            _module.args.pkgs = pkgs;
+            packages = packages.callAll pkgs.callPackage;
+            images = images.callAll pkgs.callPackage;
+
+            treefmt = {
+              projectRootFile = "flake.nix";
+              programs.nixfmt.enable = true;
+              programs.nixfmt.package = pkgs.nixfmt;
+              programs.nixfmt.strict = true;
+              programs.nixfmt.width = 120;
+              programs.shfmt.enable = true;
+              programs.shfmt.indent_size = 2;
+              programs.shellcheck.enable = true;
+              settings.formatter.shellcheck.options = [
+                "-s"
+                "bash"
+              ];
+              programs.taplo.enable = true;
+              programs.prettier.enable = true;
+              programs.prettier.package = pkgs.prettier;
+              programs.prettier.settings = {
+                tabWidth = 2;
+                useTabs = false;
+                printWidth = 120;
+              };
+              programs.just.enable = true;
+              programs.fish_indent.enable = true;
+            };
+          };
+
+        flake = {
+          overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
+          nixosModules = {
+            default = {
+              nixpkgs.overlays = [ self.overlays.default ];
+            };
           };
         };
-      };
-    };
+      }
+    );
 }

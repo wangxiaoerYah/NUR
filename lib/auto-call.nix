@@ -1,6 +1,7 @@
 { lib, dir }:
 let
-  entries = lib.filterAttrs (_: type: type == "directory") (builtins.readDir dir);
+  entries =
+    if builtins.pathExists dir then lib.filterAttrs (_: type: type == "directory") (builtins.readDir dir) else { };
 in
 {
   names = builtins.attrNames entries;
