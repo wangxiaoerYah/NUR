@@ -55,19 +55,19 @@
             };
 
             autoCall = import (projectRoot + /lib/auto-call.nix);
-            packages = autoCall {
+            packagesDir = autoCall {
               inherit lib;
               dir = projectRoot + /packages;
             };
-            images = autoCall {
+            imagesDir = autoCall {
               inherit lib;
               dir = projectRoot + /images;
             };
           in
           {
             _module.args.pkgs = pkgs;
-            packages = packages.callAll pkgs.callPackage;
-            images = images.callAll pkgs.callPackage;
+            packages = packagesDir.callAll pkgs.callPackage;
+            images = imagesDir.callAll pkgs.callPackage;
 
             treefmt = {
               projectRootFile = "flake.nix";

@@ -32,7 +32,7 @@ dockerTools.buildLayeredImage {
     Entrypoint = [ "${bot}/bin/nur-bot" ];
     Env = [
       "HOME=/tmp"
-      "NIX_CONFIG=experimental-features = nix-command flakes"
+      "NIX_CONFIG=experimental-features = nix-command flakes\nbuild-users-group ="
       "SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "NIX_SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "GIT_SSL_CAINFO=${cacert}/etc/ssl/certs/ca-bundle.crt"

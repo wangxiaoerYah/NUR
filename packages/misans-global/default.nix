@@ -1,8 +1,10 @@
 {
   fetchurl,
   lib,
+  nix-update,
   stdenvNoCC,
   unzip,
+  writeShellApplication,
   ...
 }:
 let
@@ -42,6 +44,14 @@ stdenvNoCC.mkDerivation {
   pname = "misans-global";
 
   nativeBuildInputs = [ unzip ];
+
+  passthru.updateScript = writeShellApplication {
+    name = "update-misans-global";
+    runtimeInputs = [ nix-update ];
+    text = ''
+      nix-update --flake --version=skip misans-global
+    '';
+  };
 
   sourceRoot = ".";
 

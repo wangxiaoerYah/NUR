@@ -1,6 +1,7 @@
 {
   cascadia-code,
   lib,
+  misans-global,
   nerd-fonts,
   newScope,
   lndir,
@@ -54,21 +55,7 @@ let
     packages // { mkMicrosoftFontDerivation = self.callPackage ./windows/builder.nix { }; }
   );
 
-  xiaomiPackages = makeScope newScope (
-    self:
-    packagesFromDirectoryRecursive {
-      inherit (self) callPackage newScope;
-
-      directory = ./xiaomi;
-    }
-  );
-
   inherit (windowsPackages) windows-fonts;
-
-  xiaomi-fonts = link {
-    pname = "xiaomi-fonts";
-    scope = xiaomiPackages;
-  };
 
   pfm-fonts = link {
     pname = "pfm-fonts";
@@ -76,24 +63,24 @@ let
     scope = {
       inherit
         cascadia-code
+        misans-global
         noto-fonts-color-emoji
         symbola
         windows-fonts
         wqy_microhei
         wqy_zenhei
-        xiaomi-fonts
         ;
 
       nerd-fonts-symbols = nerd-fonts.symbols-only;
     };
 
     passthru = {
-      inherit windows-fonts xiaomi-fonts;
+      inherit windows-fonts;
       microsoftPackages = lib.filterAttrs (_: value: lib.isDerivation value) windowsPackages;
 
       sources = {
         windows-fonts = windows-fonts.src;
-        misans-global = xiaomiPackages.misans-global.src;
+        misans-global = misans-global.src;
       };
     };
   };

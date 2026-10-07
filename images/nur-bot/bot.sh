@@ -22,13 +22,21 @@ git switch -C "$NUR_BOT_BRANCH" "origin/${NUR_BOT_BASE}"
 
 nix flake update
 
-if git diff --quiet -- flake.lock; then
-  echo "flake.lock unchanged, nothing to do"
+upd_attrs=$(nix eval --json ".#packages.x86_64-linux" --apply 'ps: builtins.filter (n: ((builtins.getAttr n ps).passthru or { }) ? updateScript) (builtins.attrNames ps)')
+for attr in $(echo "$upd_attrs" | jq -r '.[]'); do
+  echo "updating $attr"
+  nix run ".#${attr}.passthru.updateScript"
+  nix store gc
+
+done
+
+if git diff --quiet; then
+  echo "nothing to do"
   exit 0
 fi
 
-git add flake.lock
-git commit -m "flake.lock: update inputs"
+git add -A
+git commit -m "update inputs and packages"
 
 if [ -z "${NUR_BOT_TOKEN:-}" ]; then
   echo "no NUR_BOT_TOKEN: dry run, stopping after commit"
@@ -40,7 +48,7 @@ git push "https://${auth}github.com/${NUR_BOT_REPO}.git" "+HEAD:refs/heads/${NUR
 
 body=$(
   jq -nc \
-    --arg t "flake.lock: update inputs" \
+    --arg t "update inputs and packages" \
     --arg h "$NUR_BOT_BRANCH" \
     --arg b "$NUR_BOT_BASE" \
     '{ title: $t, head: $h, base: $b }'
