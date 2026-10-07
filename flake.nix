@@ -18,6 +18,14 @@
         stable.follows = "nixpkgs-stable";
       };
     };
+    nixos-anywhere = {
+      url = "github:nix-community/nixos-anywhere";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
+    nix-editor = {
+      url = "github:snowfallorg/nix-editor";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
