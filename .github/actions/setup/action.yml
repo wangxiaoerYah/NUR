@@ -1,62 +1,83 @@
 name: setup
-description: "缓存 CI 的前置环境 — 清磁盘 / 把域名钉到源站 IP 绕开 CDN / 写缓存凭据 / 装 nix / 装 attic 客户端"
+description: "缓存 CI 的前置环境 — 把域名钉到源站 IP 绕开 CDN / 写缓存凭据与 attic 配置 / 装 nix"
 
 inputs:
   token:
-    description: attic 的 token (本仓配的是只对 `nur` 缓存有 pull + push 权限的那把)
+    description: "attic 的 token (本仓配的是只对 `nur` 缓存有 pull + push 权限的那把)"
     required: true
   url:
-    description: 缓存服务地址 (带协议, 不含缓存名)
+    description: "缓存服务地址 (带协议, 不含缓存名)"
     required: true
   hosts_entry:
-    description: 钉进 /etc/hosts 的一行 (源站 IP + 域名); 公开仓不写死这些值, 由 secret 传
+    description: "钉进 /etc/hosts 的一行 (源站 IP + 域名); 公开仓不写死这些值, 由 secret 传"
     required: true
-  nix_config:
-    description: 传给 install-nix-action 的 extra_nix_config
+  substituters:
+    description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+    required: false
+    default: ""
+  trusted_keys:
+    description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
     required: false
     default: ""
 
 runs:
   using: composite
   steps:
-    - name: free disk, pin origin (skip cdn)
-      shell: bash
-      env:
-        HOSTS_ENTRY: ${{ inputs.hosts_entry }}
-      run: |
-        set -euo pipefail
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/az /usr/lib/jvm
-        sudo docker system prune -af >/dev/null 2>&1 || true
-        sudo apt-get clean
-        echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
-        host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
-        getent hosts "$host" >/dev/null
-        echo "origin pinned for $host"
-        df -h / | tail -1
-
-    - name: netrc
+    - name: pin origin, write credentials
       shell: bash
       env:
         ATTIC_TOKEN: ${{ inputs.token }}
+        ATTIC_URL: ${{ inputs.url }}
         HOSTS_ENTRY: ${{ inputs.hosts_entry }}
       run: |
         set -euo pipefail
         test -n "$ATTIC_TOKEN"
+        test -n "$ATTIC_URL"
+        test -n "$HOSTS_ENTRY"
+
+        # 把域名钉到源站 IP, 绕开 CDN 直连 attic
         host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
+        echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
+        getent hosts "$host" >/dev/null
+        echo "origin pinned for $host"
+
+        # nix 拉取凭据 (substituter 用)
         sudo mkdir -p /etc/nix
         umask 077
         printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
         sudo chmod 600 /etc/nix/netrc
 
-    - name: install nix
-      uses: cachix/install-nix-action@v31
-      with:
-        github_access_token: ${{ github.token }}
-        extra_nix_config: ${{ inputs.nix_config }}
+        # attic 推送凭据: 直接写 attic 自己的配置文件, 免掉"装 client + attic login"两个动作
+        # (格式实测自 `attic login` 的产出: default-server + [servers.<名>] endpoint/token)
+        mkdir -p "$HOME/.config/attic"
+        umask 077
+        cat > "$HOME/.config/attic/config.toml" <<EOF
+        default-server = "ci"
 
-    - name: install attic client
-      shell: bash
-      run: |
-        set -euo pipefail
-        nix build --show-trace --no-link --print-out-paths nixpkgs#attic-client > /tmp/attic-path
-        echo "attic $(cat /tmp/attic-path)/bin/attic"
+        [servers.ci]
+        endpoint = "${ATTIC_URL}"
+        token = "${ATTIC_TOKEN}"
+        EOF
+        chmod 600 "$HOME/.config/attic/config.toml"
+
+    - name: install nix
+      uses: NixOS/nix-installer-action@main
+      with:
+        extra-conf: |
+          extra-experimental-features = nix-command flakes
+          always-allow-substitutes = true
+          access-tokens = github.com=${{ github.token }}
+          download-attempts = 10
+          connect-timeout = 60
+          stalled-download-timeout = 2000
+          download-buffer-size = 33554432
+          http-connections = 32
+          max-substitution-jobs = 32
+          # runner 4 vCPU, 但 NixOS 的 toplevel 构建由数百个小 drv (etc/boot.json/activate 等) 组成,
+          # 是 I/O 型任务; 并行 16 个 sandbox (每 ~200MB) 在 16GB RAM 上安全, 实测是构建耗时的大头.
+          max-jobs = 16
+          min-free = 8589934592
+          max-free = 12884901888
+          extra-substituters = ${{ inputs.substituters }}
+          extra-trusted-public-keys = ${{ inputs.trusted_keys }}
+          netrc-file = /etc/nix/netrc

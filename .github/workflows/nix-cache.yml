@@ -28,36 +28,13 @@ concurrency:
 
 jobs:
   plan:
-    name: plan
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.m.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ github.token }}
-          extra_nix_config: |
-            extra-experimental-features = nix-command flakes
-      - id: m
-        run: |
-          set -euo pipefail
-          entries=()
-          for arch in x86_64-linux aarch64-linux; do
-            installables=$(nix eval --json ".#packages.$arch" --apply builtins.attrNames | jq -r '.[]' | sed 's|^|.#|' | tr '\n' ' ')
-            [ -n "$installables" ] || continue
-            runner=$([ "$arch" = x86_64-linux ] && echo ubuntu-latest || echo ubuntu-26.04-arm)
-            entries+=("$(jq -cn --arg i "$installables" --arg l "$arch" --arg r "$runner" '{label:$l, runner:$r, installables:$i}')")
-          done
-          test "${#entries[@]}" -gt 0
-          matrix=$(IFS=,; printf '{include:[%s]}' "${entries[*]}")
-          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$matrix"
+    uses: ./.github/workflows/plan.yml
 
   build:
     name: build
     needs: plan
-    if: ${{ needs.plan.outputs.matrix != '' }}
+    # fork PR 没有 secrets, setup 的 token 断言会失败; 只拦 fork 的 PR, 本仓 PR 与 push 照常
+    if: ${{ needs.plan.outputs.matrix != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     uses: ./.github/workflows/build-push.yml
     with:
       matrix: ${{ needs.plan.outputs.matrix }}

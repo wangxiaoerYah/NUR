@@ -72,17 +72,9 @@
       projectRoot = ./.;
     in
     flake-parts.lib.mkFlake { inherit inputs; } (
-      { lib, flake-parts-lib, ... }: {
+      { ... }: {
         imports = [
           inputs.treefmt-nix.flakeModule
-          (flake-parts-lib.mkTransposedPerSystemModule {
-            name = "images";
-            file = ./flake.nix;
-            option = lib.mkOption {
-              type = lib.types.attrsOf lib.types.package;
-              default = { };
-            };
-          })
         ];
         systems = [
           "x86_64-linux"
@@ -111,16 +103,11 @@
               inherit lib;
               dir = projectRoot + /packages;
             };
-            imagesDir = autoCall {
-              inherit lib;
-              dir = projectRoot + /images;
-            };
             callPkg = lib.callPackageWith (pkgs // { inherit inputs; });
           in
           {
             _module.args.pkgs = pkgs;
             packages = packagesDir.callAll callPkg;
-            images = imagesDir.callAll pkgs.callPackage;
 
             treefmt = import (projectRoot + /framework/treefmt-default.nix) { inherit pkgs; };
           };

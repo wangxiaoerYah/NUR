@@ -1,0 +1,92 @@
+name: update
+
+on:
+  schedule:
+    # 每周日 19:00 UTC = 周一 03:00 CST; GitHub 对 60 天无活动的仓会停掉 schedule, 所以保留 dispatch
+    - cron: "0 19 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: update
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.u.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-experimental-features = nix-command flakes
+            access-tokens = github.com=${{ github.token }}
+      - id: u
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          nix flake update
+
+          # 与旧 nur-bot 镜像的 bot.sh 同一套逻辑: 跑所有带 passthru.updateScript 的包
+          upd_attrs=$(nix eval --json ".#packages.x86_64-linux" --apply \
+            'ps: builtins.filter (n: ((builtins.getAttr n ps).passthru or {}) ? updateScript) (builtins.attrNames ps)')
+          for attr in $(echo "$upd_attrs" | jq -r '.[]'); do
+            echo "== updating $attr"
+            nix run ".#${attr}.passthru.updateScript"
+          done
+
+          # 先 add 再看索引 diff: 只比工作区会漏掉 updateScript 新产生的 untracked 文件
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "nothing to do"
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git commit -m "update inputs and packages"
+
+          # GITHUB_TOKEN 的 push 不会触发其它 workflow, 所以本 run 自己调 build-push 验证 (见下)
+          if git fetch origin bot/update-inputs 2>/dev/null; then
+            git push --force-with-lease origin HEAD:refs/heads/bot/update-inputs
+          else
+            git push origin HEAD:refs/heads/bot/update-inputs
+          fi
+
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr create --base main --head bot/update-inputs \
+            --title "update inputs and packages" \
+            --body "由 update workflow 生成. 构建验证见本 run: ${run_url}" \
+            || gh pr edit bot/update-inputs --body "已重新推送. 构建验证见本 run: ${run_url}"
+
+  plan:
+    needs: update
+    if: needs.update.outputs.changed == 'true'
+    uses: ./.github/workflows/plan.yml
+    with:
+      ref: bot/update-inputs
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.matrix != ''
+    uses: ./.github/workflows/build-push.yml
+    with:
+      ref: bot/update-inputs
+      matrix: ${{ needs.plan.outputs.matrix }}
+    secrets:
+      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
+      attic_url: ${{ secrets.ATTIC_URL }}
+      cache_name: ${{ secrets.ATTIC_CACHE }}
+      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+      substituters: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+      trusted_keys: ${{ secrets.ATTIC_PUBLIC_KEY }}

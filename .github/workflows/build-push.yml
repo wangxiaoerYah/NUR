@@ -7,11 +7,11 @@ on:
         description: "json: {include: [{label, runner, installables, nix-flags?, extra-substituters?, extra-keys?}]}"
         required: true
         type: string
-      batch_size:
-        description: "每次 nix build 合并的 installable 数 (也即每次 push 的粒度)"
+      ref:
+        description: "要构建的分支/提交 (空 = 调用方的默认 ref)"
         required: false
-        type: number
-        default: 3
+        type: string
+        default: ""
     secrets:
       attic_token:
         description: "attic 的 ci token (pull + push)"
@@ -44,61 +44,68 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.matrix) }}
     env:
-      ATTIC_TOKEN: ${{ secrets.attic_token }}
-      ATTIC_URL: ${{ secrets.attic_url }}
-      CACHE_NAME: ${{ secrets.cache_name }}
       INSTALLABLES: ${{ matrix.installables }}
       NIX_FLAGS: ${{ matrix.nix-flags }}
-      BATCH: ${{ inputs.batch_size }}
+      CACHE: ci:${{ secrets.cache_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
-      - uses: wangxiaoerYah/NUR/.github/actions/setup@main
+      # 磁盘清理统一做 (不分矩阵条目): 72G 新镜像上 GUI 机 toplevel 构建要 +26G (实测
+      # desktop-x99), 旧镜像的预装目录同样占盘; 清理量由 free-disk-space 默认集决定.
+      - uses: jlumbroso/free-disk-space@v2
+
+      - uses: ./.github/actions/setup
         with:
           token: ${{ secrets.attic_token }}
           url: ${{ secrets.attic_url }}
           hosts_entry: ${{ secrets.hosts_entry }}
-          nix_config: |
-            extra-experimental-features = nix-command flakes
-            download-attempts = 10
-            connect-timeout = 60
-            stalled-download-timeout = 2000
-            download-buffer-size = 33554432
-            extra-substituters = ${{ secrets.substituters }} ${{ matrix.extra-substituters }}
-            extra-trusted-public-keys = ${{ secrets.trusted_keys }} ${{ matrix.extra-keys }}
-            netrc-file = /etc/nix/netrc
+          substituters: ${{ secrets.substituters }} ${{ matrix.extra-substituters }}
+          trusted_keys: ${{ secrets.trusted_keys }} ${{ matrix.extra-keys }}
+
+      # 走 registry 的 nixpkgs# (nixpkgs-unstable, 与旧实现一致): 本仓与 Nix-Config 两个
+      # 调用方的 flake 都没有名为 nixpkgs 的 input, --inputs-from 钉不住版本; 路径与依赖
+      # 来自 cache.nixos.org.
+      - name: attic client
+        run: nix build nixpkgs#attic-client --no-link --print-out-paths > "$RUNNER_TEMP/attic-path"
 
       - name: build and push
         run: |
           set -euo pipefail
-          ATTIC=$(cat /tmp/attic-path)/bin/attic
-          "$ATTIC" login ci "$ATTIC_URL" "$ATTIC_TOKEN"
-          bad=0
-          n=0
-          group=""
-          flush() {
-            [ -n "$group" ] || return 0
-            echo "::group::build$group"
-            set +e
+          ATTIC="$(cat "$RUNNER_TEMP/attic-path")/bin/attic"
+          rc=0
+
+          # 一次构建全部 installable: 旧的"每批一个 nix build"让每个 job 重复 flake 求值
+          # (12 台 job 每批 25-28s), 一次构建只求值一次.
+          # 注意: 部分失败时 --print-out-paths 不输出任何路径 (实测), 此时改用 path-info 判定
+          # 哪些产物有效; 失败项返回 null 且 rc=0 (nix 2.19+).
+          echo "::group::nix build"
+          # shellcheck disable=SC2086
+          nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
+            > "$RUNNER_TEMP/paths" || rc=$?
+          echo "::endgroup::"
+
+          if [ "$rc" = 0 ]; then
+            mapfile -t valid < <(grep -v '^$' "$RUNNER_TEMP/paths" || true)
+          else
             # shellcheck disable=SC2086
-            nix build --keep-going --show-trace --print-out-paths $NIX_FLAGS $group > /tmp/batch-paths.txt
-            rc=$?
-            set -e
-            echo "::endgroup::"
-            [ "$rc" = 0 ] || bad=1
-            mapfile -t batch < <(grep -v '^$' /tmp/batch-paths.txt || true)
-            if [ "${#batch[@]}" -gt 0 ]; then
-              "$ATTIC" push "ci:$CACHE_NAME" "${batch[@]}"
-            fi
-            avail=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
-            if [ "${avail:-0}" -lt 20 ]; then nix store gc --max 12G || true; fi
-            df -h / | tail -1
-            group=""
-          }
-          for i in $INSTALLABLES; do
-            group="$group $i"
-            n=$((n + 1))
-            if [ $((n % BATCH)) -eq 0 ]; then flush; fi
-          done
-          flush
-          test "$bad" = 0
+            mapfile -t valid < <(nix path-info --json --json-format 1 $NIX_FLAGS $INSTALLABLES \
+              | jq -r 'to_entries[] | select(.value != null) | .key' || true)
+          fi
+
+          if [ "${#valid[@]}" -gt 0 ]; then
+            echo "pushing ${#valid[@]} paths"
+            "$ATTIC" push "$CACHE" "${valid[@]}"
+          fi
+
+          # flake inputs 预推进缓存: 下次各 job 抓取 input (nixpkgs 等 33 个源) 走 substituter
+          # 直连源站, 不再从 GitHub / channels.nixos.org 下载. 优化项, 失败不影响本次结果.
+          mapfile -t inputs < <(nix flake archive --json \
+            | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
+          if [ "${#inputs[@]}" -gt 0 ]; then
+            "$ATTIC" push "$CACHE" "${inputs[@]}" || true
+          fi
+
+          df -h / | tail -1
+          exit "$rc"
