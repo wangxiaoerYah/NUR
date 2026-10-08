@@ -53,7 +53,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       - uses: jlumbroso/free-disk-space@v2
 
-      - uses: ./.github/actions/setup
+      - uses: wangxiaoerYah/NUR/.github/actions/setup@main
         with:
           token: ${{ secrets.attic_token }}
           url: ${{ secrets.attic_url }}
