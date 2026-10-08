@@ -2,7 +2,6 @@ name: update
 
 on:
   schedule:
-    # 每周日 19:00 UTC = 周一 03:00 CST; GitHub 对 60 天无活动的仓会停掉 schedule, 所以保留 dispatch
     - cron: "0 19 * * 0"
   workflow_dispatch:
 
@@ -37,7 +36,6 @@ jobs:
 
           nix flake update
 
-          # 与旧 nur-bot 镜像的 bot.sh 同一套逻辑: 跑所有带 passthru.updateScript 的包
           upd_attrs=$(nix eval --json ".#packages.x86_64-linux" --apply \
             'ps: builtins.filter (n: ((builtins.getAttr n ps).passthru or {}) ? updateScript) (builtins.attrNames ps)')
           for attr in $(echo "$upd_attrs" | jq -r '.[]'); do
@@ -45,7 +43,6 @@ jobs:
             nix run ".#${attr}.passthru.updateScript"
           done
 
-          # 先 add 再看索引 diff: 只比工作区会漏掉 updateScript 新产生的 untracked 文件
           git add -A
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -56,7 +53,6 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
           git commit -m "update inputs and packages"
 
-          # GITHUB_TOKEN 的 push 不会触发其它 workflow, 所以本 run 自己调 build-push 验证 (见下)
           if git fetch origin bot/update-inputs 2>/dev/null; then
             git push --force-with-lease origin HEAD:refs/heads/bot/update-inputs
           else
