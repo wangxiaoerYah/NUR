@@ -56,8 +56,9 @@ jobs:
           fi
 
           body="由 update workflow 生成. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow); 合并后主分支不再重复构建 (产物已在缓存)."
-          if gh pr view bot/update-inputs --json number >/dev/null 2>&1; then
-            gh pr edit bot/update-inputs --title "update inputs and packages" --body "$body"
+          pr_num=$(gh pr list --head bot/update-inputs --state open --json number --jq '.[0].number')
+          if [ -n "$pr_num" ]; then
+            gh pr edit "$pr_num" --title "update inputs and packages" --body "$body"
           else
             gh pr create --base main --head bot/update-inputs --title "update inputs and packages" --body "$body"
           fi
