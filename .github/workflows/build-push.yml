@@ -47,6 +47,7 @@ jobs:
       INSTALLABLES: ${{ matrix.installables }}
       NIX_FLAGS: ${{ matrix.nix-flags }}
       CACHE: ci:${{ secrets.cache_name }}
+      PUSH_INPUTS: ${{ github.event_name == 'workflow_dispatch' || contains(toJSON(github.event.commits), 'flake.lock') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -88,10 +89,12 @@ jobs:
             "$ATTIC" push "$CACHE" "${valid[@]}"
           fi
 
-          mapfile -t inputs < <(nix flake archive --json \
-            | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
-          if [ "${#inputs[@]}" -gt 0 ]; then
-            "$ATTIC" push "$CACHE" "${inputs[@]}" || true
+          if [ "$PUSH_INPUTS" = "true" ]; then
+            mapfile -t inputs < <(nix flake archive --json \
+              | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
+            if [ "${#inputs[@]}" -gt 0 ]; then
+              "$ATTIC" push "$CACHE" "${inputs[@]}" || true
+            fi
           fi
 
           df -h / | tail -1

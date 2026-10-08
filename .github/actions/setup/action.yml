@@ -63,7 +63,7 @@ runs:
           extra-experimental-features = nix-command flakes
           always-allow-substitutes = true
           access-tokens = github.com=${{ github.token }}
-          download-attempts = 10
+          download-attempts = 32
           connect-timeout = 60
           stalled-download-timeout = 2000
           download-buffer-size = 33554432
