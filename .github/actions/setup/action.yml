@@ -1,15 +1,15 @@
 name: setup
-description: "缓存 CI 的前置环境 — 把域名钉到源站 IP 绕开 CDN / 写缓存凭据与 attic 配置 / 装 nix"
+description: "缓存 CI 的前置环境"
 
 inputs:
   token:
-    description: "attic 的 token (本仓配的是只对 `nur` 缓存有 pull + push 权限的那把)"
+    description: "attic 的 token"
     required: true
   url:
     description: "缓存服务地址 (带协议, 不含缓存名)"
     required: true
   hosts_entry:
-    description: "钉进 /etc/hosts 的一行 (源站 IP + 域名); 公开仓不写死这些值, 由 secret 传"
+    description: "Hosts (源站 IP + 域名)"
     required: true
   substituters:
     description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
@@ -35,20 +35,16 @@ runs:
         test -n "$ATTIC_URL"
         test -n "$HOSTS_ENTRY"
 
-        # 把域名钉到源站 IP, 绕开 CDN 直连 attic
         host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
         echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
         getent hosts "$host" >/dev/null
         echo "origin pinned for $host"
 
-        # nix 拉取凭据 (substituter 用)
         sudo mkdir -p /etc/nix
         umask 077
         printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
         sudo chmod 600 /etc/nix/netrc
 
-        # attic 推送凭据: 直接写 attic 自己的配置文件, 免掉"装 client + attic login"两个动作
-        # (格式实测自 `attic login` 的产出: default-server + [servers.<名>] endpoint/token)
         mkdir -p "$HOME/.config/attic"
         umask 077
         cat > "$HOME/.config/attic/config.toml" <<EOF
@@ -73,8 +69,6 @@ runs:
           download-buffer-size = 33554432
           http-connections = 32
           max-substitution-jobs = 32
-          # runner 4 vCPU, 但 NixOS 的 toplevel 构建由数百个小 drv (etc/boot.json/activate 等) 组成,
-          # 是 I/O 型任务; 并行 16 个 sandbox (每 ~200MB) 在 16GB RAM 上安全, 实测是构建耗时的大头.
           max-jobs = 16
           min-free = 8589934592
           max-free = 12884901888
