@@ -1,0 +1,193 @@
+version: 2.1
+
+# CircleCI equivalent of .github/workflows/nix-cache.yml
+#
+# Required CircleCI project environment variables (Project Settings → Environment Variables):
+#   ATTIC_CI_TOKEN    — Attic CI pull+push token        (≈ GitHub secret ATTIC_CI_TOKEN)
+#   ATTIC_URL         — Attic server URL (带协议, 不含缓存名) (≈ ATTIC_URL)
+#   ATTIC_CACHE       — 推送的目标缓存名               (≈ ATTIC_CACHE)
+#   ATTIC_PUBLIC_KEY  — 缓存公钥 (extra-trusted-public-keys) (≈ ATTIC_PUBLIC_KEY)
+#   ATTIC_HOSTS_ENTRY — "<IP> <hostname>" 行, 绕 CDN 直连源站 (≈ ATTIC_HOSTS_ENTRY)
+#
+# 路径过滤说明:
+#   GitHub Actions 的 paths-ignore (*.md / .gitignore / .editorconfig / .github/**)
+#   在 CircleCI 中需要动态配置 (path-filtering orb) 才能实现。
+#   当前版本对 main 分支的所有推送均触发构建, 可通过
+#   Project Settings → Advanced → "Only build pull requests" 减少噪音。
+
+commands:
+  free-disk-and-pin-origin:
+    description: "释放磁盘空间, 将 Attic 源站 IP 钉进 /etc/hosts 绕开 CDN"
+    steps:
+      - run:
+          name: Free disk space and pin Attic origin
+          command: |
+            set -euo pipefail
+            sudo rm -rf \
+              /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+              /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+              /usr/share/swift /usr/local/.ghcup /opt/az /usr/lib/jvm
+            sudo docker system prune -af >/dev/null 2>&1 || true
+            sudo apt-get clean
+            echo "$ATTIC_HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
+            host=$(printf '%s' "$ATTIC_HOSTS_ENTRY" | awk '{print $2}')
+            getent hosts "$host" >/dev/null
+            echo "origin pinned for $host"
+            df -h / | tail -1
+
+  write-netrc:
+    description: "写 Attic 认证凭据到 /etc/nix/netrc"
+    steps:
+      - run:
+          name: Write Attic netrc
+          command: |
+            set -euo pipefail
+            host=$(printf '%s' "$ATTIC_HOSTS_ENTRY" | awk '{print $2}')
+            sudo mkdir -p /etc/nix
+            umask 077
+            printf 'machine %s login nix password %s\n' \
+              "$host" "$ATTIC_CI_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
+            sudo chmod 600 /etc/nix/netrc
+
+  install-nix:
+    description: "安装 Nix (Determinate Systems 安装器) 并追加缓存配置"
+    steps:
+      - run:
+          name: Install Nix
+          command: |
+            curl --proto '=https' --tlsv1.2 -sSf -L \
+              https://install.determinate.systems/nix | \
+              sh -s -- install --no-confirm
+            # 让后续 step 能直接使用 nix 命令
+            echo '. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' \
+              >> "$BASH_ENV"
+      - run:
+          name: Configure Nix (substituters + netrc)
+          command: |
+            set -euo pipefail
+            # 追加缓存和网络配置; heredoc 不加引号以展开 shell 变量
+            sudo tee -a /etc/nix/nix.conf <<EOF
+            extra-experimental-features = nix-command flakes
+            download-attempts = 10
+            connect-timeout = 60
+            stalled-download-timeout = 2000
+            download-buffer-size = 33554432
+            extra-substituters = ${ATTIC_URL}/${ATTIC_CACHE}
+            extra-trusted-public-keys = ${ATTIC_PUBLIC_KEY}
+            netrc-file = /etc/nix/netrc
+            EOF
+            sudo systemctl restart nix-daemon || true
+
+  install-attic-client:
+    description: "通过 nix build 安装 attic-client, 路径写入 /tmp/attic-path"
+    steps:
+      - run:
+          name: Install Attic client
+          command: |
+            nix build --show-trace --no-link --print-out-paths \
+              nixpkgs#attic-client > /tmp/attic-path
+            echo "attic: $(cat /tmp/attic-path)/bin/attic"
+
+  build-and-push:
+    description: "批量构建指定架构的所有 flake packages 并推送到 Attic"
+    parameters:
+      arch:
+        type: string
+        description: "目标架构, 例如 x86_64-linux 或 aarch64-linux"
+      batch_size:
+        type: integer
+        default: 3
+        description: "每批合并构建的 installable 数量"
+    steps:
+      - run:
+          name: Build and push << parameters.arch >> packages
+          no_output_timeout: 6h
+          command: |
+            set -euo pipefail
+            ATTIC=$(cat /tmp/attic-path)/bin/attic
+            "$ATTIC" login ci "$ATTIC_URL" "$ATTIC_CI_TOKEN"
+
+            # 从 flake 中枚举当前架构的所有包
+            INSTALLABLES=$(nix eval --json \
+              ".#packages.<< parameters.arch >>" \
+              --apply builtins.attrNames | \
+              jq -r '.[]' | sed 's|^|.#|' | tr '\n' ' ')
+
+            # 去掉纯空白后检查是否有包
+            if [ -z "${INSTALLABLES//[[:space:]]/}" ]; then
+              echo "No packages found for << parameters.arch >>, skipping."
+              exit 0
+            fi
+
+            bad=0
+            n=0
+            group=""
+            BATCH=<< parameters.batch_size >>
+
+            flush() {
+              [ -n "$group" ] || return 0
+              set +e
+              # shellcheck disable=SC2086
+              nix build --keep-going --show-trace --print-out-paths $group \
+                > /tmp/batch-paths.txt
+              rc=$?
+              set -e
+              [ "$rc" = 0 ] || bad=1
+              mapfile -t batch < <(grep -v '^$' /tmp/batch-paths.txt || true)
+              if [ "${#batch[@]}" -gt 0 ]; then
+                "$ATTIC" push "ci:${ATTIC_CACHE}" "${batch[@]}"
+              fi
+              avail=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+              if [ "${avail:-0}" -lt 20 ]; then
+                nix store gc --max 12G || true
+              fi
+              df -h / | tail -1
+              group=""
+            }
+
+            for i in $INSTALLABLES; do
+              group="$group $i"
+              n=$((n + 1))
+              if [ $((n % BATCH)) -eq 0 ]; then flush; fi
+            done
+            flush
+            test "$bad" = 0
+
+jobs:
+  build-x86_64-linux:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: large        # 4 vCPU / 15 GB, 可按需改为 xlarge
+    steps:
+      - checkout
+      - free-disk-and-pin-origin
+      - write-netrc
+      - install-nix
+      - install-attic-client
+      - build-and-push:
+          arch: x86_64-linux
+
+  build-aarch64-linux:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: arm.large    # 4 vCPU / 8 GB ARM 原生机器
+    steps:
+      - checkout
+      - free-disk-and-pin-origin
+      - write-netrc
+      - install-nix
+      - install-attic-client
+      - build-and-push:
+          arch: aarch64-linux
+
+workflows:
+  nix-cache:
+    jobs:
+      - build-x86_64-linux:
+          filters:
+            branches:
+              only: main
+      - build-aarch64-linux:
+          filters:
+            branches:
+              only: main
