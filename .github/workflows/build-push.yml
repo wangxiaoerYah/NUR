@@ -71,9 +71,24 @@ jobs:
           rc=0
 
           echo "::group::nix build"
-          # shellcheck disable=SC2086
-          nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
-            > "$RUNNER_TEMP/paths" || rc=$?
+
+          attempt=1
+          max_attempts=3
+          while :; do
+            rc=0
+            # shellcheck disable=SC2086
+            nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
+              > "$RUNNER_TEMP/paths" 2> "$RUNNER_TEMP/build.err" || rc=$?
+            cat "$RUNNER_TEMP/build.err"
+            if [ "$rc" = 0 ]; then break; fi
+            if [ "$attempt" -ge "$max_attempts" ] \
+              || ! grep -qE "unable to download|Stream error|HTTP error|could not be realised|no substituter that can build it|Connection reset|timed out" "$RUNNER_TEMP/build.err"; then
+              break
+            fi
+            attempt=$((attempt + 1))
+            echo "瞬时的下载/替身失败, 第 $attempt 次重试 (最多 $max_attempts 次)"
+            sleep 30
+          done
           echo "::endgroup::"
 
           if [ "$rc" = 0 ]; then

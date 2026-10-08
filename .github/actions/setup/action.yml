@@ -65,13 +65,15 @@ runs:
           access-tokens = github.com=${{ github.token }}
           download-attempts = 32
           connect-timeout = 60
-          stalled-download-timeout = 2000
+          stalled-download-timeout = 120
           download-buffer-size = 33554432
-          http-connections = 32
-          max-substitution-jobs = 32
+          http2 = false
+          http-connections = 8
+          max-substitution-jobs = 8
           max-jobs = 16
           min-free = 8589934592
           max-free = 12884901888
+          fallback = true
           extra-substituters = ${{ inputs.substituters }}
           extra-trusted-public-keys = ${{ inputs.trusted_keys }}
           netrc-file = /etc/nix/netrc
