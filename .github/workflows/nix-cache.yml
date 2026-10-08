@@ -29,11 +29,15 @@ concurrency:
 jobs:
   plan:
     uses: ./.github/workflows/plan.yml
+    secrets:
+      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
+      substituter: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
+      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
 
   build:
     name: build
     needs: plan
-    if: ${{ needs.plan.outputs.matrix != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ needs.plan.outputs.matrix != '{"include":[]}' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     uses: ./.github/workflows/build-push.yml
     with:
       matrix: ${{ needs.plan.outputs.matrix }}

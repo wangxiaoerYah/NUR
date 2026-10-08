@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "0 19 * * 0"
   workflow_dispatch:
+  pull_request:
+    types:
+      - closed
 
 permissions:
   contents: write
@@ -16,9 +19,8 @@ concurrency:
 jobs:
   update:
     name: update
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.u.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
       - uses: NixOS/nix-installer-action@main
@@ -26,7 +28,7 @@ jobs:
           extra-conf: |
             extra-experimental-features = nix-command flakes
             access-tokens = github.com=${{ github.token }}
-      - id: u
+      - name: update and open PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -45,12 +47,10 @@ jobs:
 
           git add -A
           if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "nothing to do"
             exit 0
           fi
 
-          echo "changed=true" >> "$GITHUB_OUTPUT"
           git commit -m "update inputs and packages"
 
           if git fetch origin bot/update-inputs 2>/dev/null; then
@@ -59,30 +59,24 @@ jobs:
             git push origin HEAD:refs/heads/bot/update-inputs
           fi
 
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh pr create --base main --head bot/update-inputs \
             --title "update inputs and packages" \
-            --body "由 update workflow 生成. 构建验证见本 run: ${run_url}" \
-            || gh pr edit bot/update-inputs --body "已重新推送. 构建验证见本 run: ${run_url}"
+            --body "由 update workflow 生成. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow); 合并后主分支不再重复构建 (产物已在缓存)." \
+            || gh pr edit bot/update-inputs --body "已重新推送. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow)."
 
-  plan:
-    needs: update
-    if: needs.update.outputs.changed == 'true'
-    uses: ./.github/workflows/plan.yml
-    with:
-      ref: bot/update-inputs
-
-  build:
-    needs: plan
-    if: needs.plan.outputs.matrix != ''
-    uses: ./.github/workflows/build-push.yml
-    with:
-      ref: bot/update-inputs
-      matrix: ${{ needs.plan.outputs.matrix }}
-    secrets:
-      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
-      attic_url: ${{ secrets.ATTIC_URL }}
-      cache_name: ${{ secrets.ATTIC_CACHE }}
-      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
-      substituters: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
-      trusted_keys: ${{ secrets.ATTIC_PUBLIC_KEY }}
+  cleanup:
+    name: cleanup
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.merged && github.event.pull_request.head.ref == 'bot/update-inputs' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: delete bot branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/heads/bot/update-inputs" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/bot/update-inputs"
+            echo "已删除 bot/update-inputs (PR 未合并)"
+          else
+            echo "bot/update-inputs 不存在, 无需删除"
+          fi
