@@ -19,4 +19,9 @@ _: _final: prev: {
   };
 
   google-chrome = prev.google-chrome.override { commandLineArgs = "--wayland-text-input-version=3"; };
+
+  # GitHub runner 缺少 userns,无法运行
+  protontricks = prev.protontricks.overrideAttrs (_: {
+    doInstallCheck = false;
+  });
 }
