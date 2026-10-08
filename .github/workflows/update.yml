@@ -53,16 +53,18 @@ jobs:
 
           git commit -m "update inputs and packages"
 
-          if git fetch origin bot/update-inputs 2>/dev/null; then
-            git push --force-with-lease origin HEAD:refs/heads/bot/update-inputs
+          if git ls-remote --exit-code origin bot/update-inputs >/dev/null 2>&1; then
+            git push --force origin HEAD:refs/heads/bot/update-inputs
           else
             git push origin HEAD:refs/heads/bot/update-inputs
           fi
 
-          gh pr create --base main --head bot/update-inputs \
-            --title "update inputs and packages" \
-            --body "由 update workflow 生成. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow); 合并后主分支不再重复构建 (产物已在缓存)." \
-            || gh pr edit bot/update-inputs --body "已重新推送. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow)."
+          body="由 update workflow 生成. 构建验证走 PR 的 nix-cache (请在 PR 页允许运行 workflow); 合并后主分支不再重复构建 (产物已在缓存)."
+          if gh pr view bot/update-inputs --json number >/dev/null 2>&1; then
+            gh pr edit bot/update-inputs --title "update inputs and packages" --body "$body"
+          else
+            gh pr create --base main --head bot/update-inputs --title "update inputs and packages" --body "$body"
+          fi
 
   cleanup:
     name: cleanup
