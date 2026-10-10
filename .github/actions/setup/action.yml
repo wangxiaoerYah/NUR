@@ -70,8 +70,8 @@ runs:
           http2 = false
           http-connections = 8
           max-substitution-jobs = 8
-          max-jobs = 4
-          cores = 1
+          max-jobs = 8
+          cores = 4
           min-free = 2147483648
           max-free = 4294967296
           fallback = true
