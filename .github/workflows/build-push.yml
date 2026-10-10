@@ -71,16 +71,30 @@ jobs:
           rc=0
 
           echo "::group::nix build"
+          df -h / | tail -1
+          free -m | head -2
+
+          # nix 的 stderr 同步写日志文件 (语句重定向, 无竞态), 同时由后台 tail -f 实时吐进 CI 日志;
+          # 只用行改向时 runner 被外部终止就什么都看不到, 故不能省掉 tail.
+          log="$RUNNER_TEMP/build.err"
+          : > "$log"
+          tail -n +1 -f "$log" &
+          tail_pid=$!
 
           attempt=1
           max_attempts=3
           while :; do
             rc=0
+            : > "$log"
             # shellcheck disable=SC2086
             nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
-              > "$RUNNER_TEMP/paths" 2> "$RUNNER_TEMP/build.err" || rc=$?
-            cat "$RUNNER_TEMP/build.err"
+              > "$RUNNER_TEMP/paths" 2>> "$log" || rc=$?
             if [ "$rc" = 0 ]; then break; fi
+            sleep 1
+            echo "nix build 退出码 $rc (第 $attempt 次)"
+            df -h / | tail -1
+            free -m | head -2
+            sudo dmesg --ctime 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -5 || true
             if [ "$attempt" -ge "$max_attempts" ] \
               || ! grep -qE "unable to download|Stream error|HTTP error|could not be realised|no substituter that can build it|Connection reset|timed out" "$RUNNER_TEMP/build.err"; then
               break
@@ -89,6 +103,9 @@ jobs:
             echo "瞬时的下载/替身失败, 第 $attempt 次重试 (最多 $max_attempts 次)"
             sleep 30
           done
+          sleep 1
+          kill "$tail_pid" 2>/dev/null || true
+          wait "$tail_pid" 2>/dev/null || true
           echo "::endgroup::"
 
           if [ "$rc" = 0 ]; then

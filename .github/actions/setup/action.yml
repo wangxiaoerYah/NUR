@@ -70,9 +70,10 @@ runs:
           http2 = false
           http-connections = 8
           max-substitution-jobs = 8
-          max-jobs = 16
-          min-free = 8589934592
-          max-free = 12884901888
+          max-jobs = 4
+          cores = 1
+          min-free = 2147483648
+          max-free = 4294967296
           fallback = true
           extra-substituters = ${{ inputs.substituters }}
           extra-trusted-public-keys = ${{ inputs.trusted_keys }}
