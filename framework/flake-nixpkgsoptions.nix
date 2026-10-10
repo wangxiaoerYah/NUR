@@ -32,7 +32,7 @@ _localFlake:
             inputs.nur.overlays.default
             inputs.self.overlays.default
           ]
-          ++ (import ./overlays { inherit inputs; })
+          ++ (import ./nixpkgs-overlays { inherit inputs; })
           ++ fleet.extraOverlays;
 
           settings = {

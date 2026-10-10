@@ -9,7 +9,7 @@ _localFlake:
 }:
 let
   projectRoot = fleet.src;
-  hostLib = import ./nixos-host.nix {
+  hostLib = import ./lib/nixos-host.nix {
     self = config.flake;
     inherit
       fleet

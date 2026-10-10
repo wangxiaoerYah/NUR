@@ -8,7 +8,7 @@ _localFlake:
   ...
 }:
 let
-  hostLib = import ./nixos-host.nix {
+  hostLib = import ./lib/nixos-host.nix {
     self = config.flake;
     inherit
       fleet
@@ -21,6 +21,24 @@ let
   wants =
     what: actual: expected:
     if actual == expected then null else "${what}: 期望 ${builtins.toJSON expected}, 实际 ${builtins.toJSON actual}";
+
+  layoutFaults =
+    (import ./lib/layout-faults.nix { inherit lib; }) {
+      root = fleet.src;
+      dirs = [
+        "mod"
+        "hosts"
+      ];
+    }
+    ++ (import ./lib/layout-faults.nix { inherit lib; }) {
+      root = ./..;
+      dirs = [
+        "framework"
+        "lib"
+        "packages"
+        "overlays"
+      ];
+    };
 
   inventoryFaults =
     let
@@ -372,6 +390,19 @@ let
       touch $out
     '';
   };
+  layoutChecks = pkgs: {
+    framework-layout =
+      builtins.seq
+        (
+          if layoutFaults == [ ] then true else throw "目录约定不满足 (规则见 NUR README 的目录约定):
+${lib.concatStringsSep "\n" layoutFaults}"
+        )
+        (
+          pkgs.runCommand "check-framework-layout" { } ''
+            touch $out
+          ''
+        );
+  };
   inventoryChecks = pkgs: {
     inventory-sync =
       builtins.seq
@@ -394,6 +425,7 @@ in
   perSystem = { pkgs, system, ... }: {
     checks =
       lintChecks pkgs
+      // layoutChecks pkgs
       // inventoryChecks pkgs
       // lib.mapAttrs' (name: sc: lib.nameValuePair "gpu-${name}" (mkCheck pkgs (sc.meta.hostPlatform or system) name sc)) (
         lib.filterAttrs (_: sc: (sc.meta.hostPlatform or system) == system) scenarios

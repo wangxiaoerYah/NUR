@@ -8,7 +8,7 @@
   appsDir ? src + "/mod/flake/scripts",
   patchesDir ? src + "/mod/flake/patches",
   extraOverlays ? [ ],
-  treefmt ? (import ../framework/treefmt-default.nix),
+  treefmt ? (import ../framework/lib/treefmt-default.nix),
 }:
 inputs.flake-parts.lib.mkFlake { inherit inputs; } (
   { ... }: {

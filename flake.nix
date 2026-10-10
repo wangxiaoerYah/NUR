@@ -107,11 +107,11 @@
             _module.args.pkgs = pkgs;
             packages = packagesDir.callAll callPkg;
 
-            treefmt = import (projectRoot + /framework/treefmt-default.nix) { inherit pkgs; };
+            treefmt = import (projectRoot + /framework/lib/treefmt-default.nix) { inherit pkgs; };
           };
 
         flake = {
-          lib.mkFleet = import (projectRoot + /lib/mkFleet.nix) { inherit inputs; };
+          lib.mkFleet = import (projectRoot + /lib/mk-fleet.nix) { inherit inputs; };
           overlays.default = import (projectRoot + /overlays/default.nix) { inherit self; };
           nixosModules = {
             colmena = inputs.colmena.nixosModules.deploymentOptions;

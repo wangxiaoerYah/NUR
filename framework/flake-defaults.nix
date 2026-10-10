@@ -12,8 +12,8 @@ _localFlake:
       lib.filterAttrs (_n: v: v.pkgs.stdenv.hostPlatform.system == system) config.flake.nixosConfigurations
     )
   );
-  perSystem = { pkgs, self', ... }: {
+  perSystem = { pkgs, config, ... }: {
     treefmt = fleet.treefmt { inherit pkgs; };
-    apps.default = self'.apps.colmena;
+    apps.default = config.apps.colmena;
   };
 }
