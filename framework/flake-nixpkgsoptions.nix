@@ -25,7 +25,7 @@ _localFlake:
         {
 
           patches = autoPatches;
-          permittedInsecurePackages = [ "ventoy-1.1.17" ];
+          permittedInsecurePackages = [ "ventoy-1.1.18" ];
 
           overlays = [
             inputs.agenix.overlays.default
