@@ -24,4 +24,12 @@ _: _final: prev: {
   protontricks = prev.protontricks.overrideAttrs (_: {
     doInstallCheck = false;
   });
+
+  # 在 nix-on-droid 上 /etc 全是指向 store 的符号链接, 上游两条测试断言的是 /etc/passwd 不在 store
+  mcp-nixos = prev.mcp-nixos.overridePythonAttrs (old: {
+    disabledTests = (old.disabledTests or [ ]) ++ [
+      "test_etc_passwd_rejected"
+      "test_invalid_path_outside_store"
+    ];
+  });
 }

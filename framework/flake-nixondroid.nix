@@ -53,6 +53,7 @@ in
       config = {
         allowUnfree = true;
       };
+      overlays = import ./nixpkgs-overlays { inherit inputs; };
     };
     home-manager-path = inputs.home-manager.outPath;
   };
