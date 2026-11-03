@@ -56,6 +56,8 @@ jobs:
 
       - uses: wangxiaoerYah/NUR/.github/actions/setup@main
         with:
+          cache_url: ${{ inputs.cache_url }}
+          cache_token: ${{ secrets.niks3_token }}
           substituters: ${{ inputs.substituters }} ${{ matrix.extra-substituters }}
           trusted_keys: ${{ inputs.trusted_keys }} ${{ matrix.extra-keys }}
 
@@ -66,18 +68,14 @@ jobs:
         with:
           server-url: ${{ inputs.cache_url }}
 
-      # 读侧是门控的: 构建时的拉取也要带凭据 (access-tokens 走 Bearer, 等价 netrc 的 password).
-      - name: gated read credentials
+      # 读侧门控的凭据已在 setup 的 access-tokens 里(daemon 启动前落盘);
+      # 这里只把同一把 token 落成文件, 给下面显式 push 用.
+      - name: cache token file
         env:
           NIKS3_TOKEN: ${{ secrets.niks3_token }}
         run: |
           set -euo pipefail
-          if [ -z "${NIKS3_TOKEN:-}" ]; then
-            echo "::warning::没有 niks3_token, 拉取只靠 cache.nixos.org 兜底"
-            exit 0
-          fi
-          host=$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')
-          echo "access-tokens = $host $NIKS3_TOKEN" | sudo tee -a /etc/nix/nix.conf >/dev/null
+          [ -n "${NIKS3_TOKEN:-}" ] || exit 0
           umask 077
           printf '%s' "$NIKS3_TOKEN" > "$RUNNER_TEMP/niks3.token"
 
@@ -144,13 +142,10 @@ jobs:
               | jq -r 'to_entries[] | select(.value != null) | .key' || true)
           fi
 
-          # action 的 post-build-hook 已经逐条推过; 这里补推一次是幂等的兜底 (hook 在非 trusted-user
-          # runner 上退化成事后扫描, 且被取消的 job 走不到 post 步骤).
-          if [ "${#valid[@]}" -gt 0 ] && [ "${#AUTH[@]}" -gt 0 ]; then
-            echo "pushing ${#valid[@]} paths"
-            "$NIKS3" push --server-url "$CACHE_URL" "${AUTH[@]}" "${valid[@]}"
-          fi
-
+          # 构建产物一律交给 action 的 post-build-hook 上传, 这里不再补推:
+          # 两个 matrix job 会对同一批 store path 并发推同一个 NAR, niks3 会把败方的
+          # multipart upload 主动 abort (server/uploads.go 的 abortRedundantMultipartUploads),
+          # 败方后续 part PUT 就吃 R2 的 404 NoSuchUpload -> 整个 push 变成 fatal.
           if [ "$PUSH_INPUTS" = "true" ] && [ "${#AUTH[@]}" -gt 0 ]; then
             mapfile -t inputs < <(nix flake archive --json \
               | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)

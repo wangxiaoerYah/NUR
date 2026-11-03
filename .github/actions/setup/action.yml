@@ -2,6 +2,14 @@ name: setup
 description: "缓存 CI 的前置环境"
 
 inputs:
+  cache_url:
+    description: "缓存地址 (用于在 nix.conf 里写 access-tokens 的 host 部分)"
+    required: false
+    default: ""
+  cache_token:
+    description: "读侧门控用的 token (写进 access-tokens, 必须在 nix-daemon 启动前落盘)"
+    required: false
+    default: ""
   substituters:
     description: "额外 substituters (缓存本身由 niks3-action 从 /api/cache-config 配)"
     required: false
@@ -14,13 +22,37 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: resolve cache host
+      id: host
+      if: ${{ inputs.cache_url != '' }}
+      shell: bash
+      env:
+        CACHE_URL: ${{ inputs.cache_url }}
+      run: |
+        set -euo pipefail
+        printf 'host=%s\n' "$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')" >> "$GITHUB_OUTPUT"
+
+    - name: write cache netrc
+      if: ${{ inputs.cache_token != '' }}
+      shell: bash
+      env:
+        CACHE_URL: ${{ inputs.cache_url }}
+        CACHE_TOKEN: ${{ inputs.cache_token }}
+      run: |
+        set -euo pipefail
+        sudo mkdir -p /etc/nix
+        umask 077
+        printf 'machine %s login nix password %s\n' "$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')" "$CACHE_TOKEN" \
+          | sudo tee /etc/nix/netrc >/dev/null
+        sudo chmod 600 /etc/nix/netrc
+
     - name: install nix
       uses: NixOS/nix-installer-action@main
       with:
         extra-conf: |
           extra-experimental-features = nix-command flakes
           always-allow-substitutes = true
-          access-tokens = github.com=${{ github.token }}
+          access-tokens = github.com=${{ github.token }} ${{ inputs.cache_token == '' && '' || format('{0}={1}', steps.host.outputs.host, inputs.cache_token) }}
           download-attempts = 32
           connect-timeout = 60
           stalled-download-timeout = 120
@@ -35,3 +67,4 @@ runs:
           fallback = true
           extra-substituters = ${{ inputs.substituters }}
           extra-trusted-public-keys = ${{ inputs.trusted_keys }}
+          ${{ inputs.cache_token == '' && '' || 'netrc-file = /etc/nix/netrc' }}
