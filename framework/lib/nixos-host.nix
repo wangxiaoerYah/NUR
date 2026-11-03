@@ -16,7 +16,7 @@ let
   hostsMeta = lib.genAttrs hostNames (name: import "${projectRoot}/hosts/${name}/meta.nix");
 
   globalConfig = import (projectRoot + "/mod/lib/global-config.nix");
-  modLib = import "${projectRoot}/mod/lib" { inherit lib; };
+  modLib = import "${projectRoot}/mod/lib" { inherit lib projectRoot; };
 
   specialArgsFor =
     metaSet: name:

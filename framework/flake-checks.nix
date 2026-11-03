@@ -40,6 +40,40 @@ let
       ];
     };
 
+  storePathFaults =
+    let
+      srcPrefix = toString fleet.src + "/";
+      fromSecret =
+        cfg:
+        lib.mapAttrsToList (n: v: {
+          what = "age.secrets.${n}.file";
+          path = v.file or null;
+        }) (cfg.age.secrets or { });
+      fromHomeFiles =
+        cfg:
+        map (f: {
+          what = "home.file";
+          path = f.source or null;
+        }) (lib.attrValues (cfg.home.file or { }));
+      fromUsers =
+        cfg:
+        lib.concatMap (
+          u:
+          map (f: {
+            what = "home.file";
+            path = f.source or null;
+          }) (lib.attrValues (u.home.file or { }))
+        ) (lib.attrValues (cfg.home-manager.users or { }));
+      faultsOf =
+        name: cfg:
+        map (f: "主机 ${name}: ${f.what} 指向仓库内未归一化路径 (应改用 builtins.path): ${toString f.path}") (
+          builtins.filter (f: f.path != null && lib.hasPrefix srcPrefix (toString f.path)) (
+            fromSecret cfg ++ fromHomeFiles cfg ++ fromUsers cfg
+          )
+        );
+    in
+    lib.concatLists (lib.mapAttrsToList faultsOf (config.flake.nixosConfigurations or { }));
+
   inventoryFaults =
     let
       root = fleet.src;
@@ -410,6 +444,22 @@ ${lib.concatStringsSep "\n" layoutFaults}"
           ''
         );
   };
+  storePathChecks = pkgs: {
+    store-path-normalized =
+      builtins.seq
+        (
+          if storePathFaults == [ ] then
+            true
+          else
+            throw "仓库内文件被直接喂给派生, 换一个提交就会让下游派生全变 (规则见 skill flake/store-path-stability):
+${lib.concatStringsSep "\n" storePathFaults}"
+        )
+        (
+          pkgs.runCommand "check-store-path-normalized" { } ''
+            touch $out
+          ''
+        );
+  };
   inventoryChecks = pkgs: {
     inventory-sync =
       builtins.seq
@@ -434,6 +484,7 @@ in
       lintChecks pkgs
       // layoutChecks pkgs
       // inventoryChecks pkgs
+      // storePathChecks pkgs
       // lib.mapAttrs' (name: sc: lib.nameValuePair "gpu-${name}" (mkCheck pkgs (sc.meta.hostPlatform or system) name sc)) (
         lib.filterAttrs (_: sc: (sc.meta.hostPlatform or system) == system) scenarios
       )

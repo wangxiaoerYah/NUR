@@ -50,6 +50,22 @@ runs:
           | sudo tee /etc/nix/netrc >/dev/null
         sudo chmod 600 /etc/nix/netrc
 
+    - name: runner sizing
+      id: sizing
+      shell: bash
+      run: |
+        set -euo pipefail
+        cpus=$(nproc)
+        if [ "$cpus" -ge 8 ]; then
+          jobs=$((cpus / 2))
+          cores=2
+        else
+          jobs=$cpus
+          cores=1
+        fi
+        printf 'max_jobs=%s\ncores=%s\n' "$jobs" "$cores" >> "$GITHUB_OUTPUT"
+        echo "runner: $cpus vCPU -> max-jobs=$jobs cores=$cores"
+
     - name: install nix
       uses: NixOS/nix-installer-action@main
       with:
@@ -64,8 +80,8 @@ runs:
           http2 = false
           http-connections = 8
           max-substitution-jobs = 8
-          max-jobs = 8
-          cores = 4
+          max-jobs = ${{ steps.sizing.outputs.max_jobs }}
+          cores = ${{ steps.sizing.outputs.cores }}
           min-free = 2147483648
           max-free = 4294967296
           fallback = true
