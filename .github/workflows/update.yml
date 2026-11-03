@@ -19,11 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: NixOS/nix-installer-action@main
-        with:
-          extra-conf: |
-            extra-experimental-features = nix-command flakes
-            access-tokens = github.com=${{ github.token }}
+      - uses: wangxiaoerYah/NUR/.github/actions/setup@main
       - name: update and open PR
         env:
           GH_TOKEN: ${{ github.token }}

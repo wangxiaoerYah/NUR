@@ -1,0 +1,44 @@
+name: plan
+description: "枚举 .#packages 的构建矩阵; 已在缓存里的包跳过"
+
+inputs:
+  cache_url:
+    description: "niks3 server URL; 空 = 跳过缓存新鲜度检查, 全部进矩阵"
+    required: false
+    default: ""
+
+outputs:
+  matrix:
+    description: "json: {include: [{label, runner, installables}]}"
+    value: ${{ steps.m.outputs.matrix }}
+
+runs:
+  using: composite
+  steps:
+    - id: m
+      shell: bash
+      env:
+        CACHE_URL: ${{ inputs.cache_url }}
+      run: |
+        set -euo pipefail
+        entries=()
+        for arch in x86_64-linux aarch64-linux; do
+          pairs=$(nix eval --json ".#packages.$arch" --apply \
+            'ps: map (n: { name = n; path = (builtins.getAttr n ps).outPath; }) (builtins.attrNames ps)')
+          [ "$(echo "$pairs" | jq 'length')" -gt 0 ] || { echo "::error::.#packages.$arch 为空"; exit 1; }
+
+          installables=""
+          while IFS=$'\t' read -r name path; do
+            if [ -n "$CACHE_URL" ] && nix path-info --store "$CACHE_URL" "$path" >/dev/null 2>&1; then
+              echo "cached: $name"
+            else
+              installables="$installables .#$name"
+            fi
+          done < <(echo "$pairs" | jq -r '.[] | "\(.name)\t\(.path)"')
+          [ -n "$installables" ] || continue
+          runner=$([ "$arch" = x86_64-linux ] && echo ubuntu-latest || echo ubuntu-26.04-arm)
+          entries+=("$(jq -cn --arg i "$installables" --arg l "$arch" --arg r "$runner" '{label:$l, runner:$r, installables:$i}')")
+        done
+        matrix=$(IFS=,; printf '{include:[%s]}' "${entries[*]}")
+        printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+        printf '%s\n' "$matrix"

@@ -21,19 +21,44 @@ concurrency:
 
 jobs:
   plan:
-    uses: ./.github/workflows/plan.yml
-    with:
-      cache_url: ${{ vars.NIKS3_URL }}
-    secrets:
-      niks3_token: ${{ secrets.NIKS3_TOKEN }}
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with:
+          cache_url: ${{ vars.NIKS3_URL }}
+          cache_token: ${{ secrets.NIKS3_TOKEN }}
+      - id: plan
+        uses: ./.github/actions/plan
+        with:
+          cache_url: ${{ vars.NIKS3_URL }}
 
   build:
-    name: build
+    name: ${{ matrix.label }}
     needs: plan
     if: ${{ needs.plan.outputs.matrix != '{"include":[]}' }}
-    uses: ./.github/workflows/build-push.yml
-    with:
-      matrix: ${{ needs.plan.outputs.matrix }}
-      cache_url: ${{ vars.NIKS3_URL }}
-    secrets:
-      niks3_token: ${{ secrets.NIKS3_TOKEN }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jlumbroso/free-disk-space@v2
+      - uses: ./.github/actions/setup
+        with:
+          cache_url: ${{ vars.NIKS3_URL }}
+          cache_token: ${{ secrets.NIKS3_TOKEN }}
+          substituters: ${{ matrix.extra-substituters }}
+          trusted_keys: ${{ matrix.extra-keys }}
+      - uses: ./.github/actions/build-push
+        env:
+          NIKS3_TOKEN: ${{ secrets.NIKS3_TOKEN }}
+        with:
+          cache_url: ${{ vars.NIKS3_URL }}
+          installables: ${{ matrix.installables }}
+          nix_flags: ${{ matrix.nix-flags }}
+          push_inputs: ${{ github.event_name == 'workflow_dispatch' || contains(toJSON(github.event.commits), 'flake.lock') }}

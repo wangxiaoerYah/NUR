@@ -1,0 +1,110 @@
+name: build-push
+description: "构建给定 installables 并推到 niks3 缓存 (OIDC 认证, 逐条上传)"
+
+inputs:
+  cache_url:
+    description: "niks3 server URL"
+    required: true
+  installables:
+    description: "以空格分隔的 installables"
+    required: true
+  nix_flags:
+    description: "额外 nix build 参数"
+    required: false
+    default: ""
+  push_inputs:
+    description: "是否顺带把 flake inputs 推进缓存 (`true`/`false`)"
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # 官方 action: 从 /api/cache-config 取 substituter 与公钥, 注册 post-build-hook 逐条上传,
+    # post 步骤 drain 队列; 推送认证走 GitHub OIDC (调用方作业要 id-token: write).
+    - id: niks3
+      uses: Mic92/niks3-action@v1
+      with:
+        server-url: ${{ inputs.cache_url }}
+
+    # 读侧门控的凭据由调用方在 env 里给 (composite action 拿不到 secrets 上下文);
+    # 这里只把同一把 token 落成文件, 给下面的显式 push 用.
+    - name: cache token file
+      shell: bash
+      run: |
+        set -euo pipefail
+        [ -n "${NIKS3_TOKEN:-}" ] || exit 0
+        umask 077
+        printf '%s' "$NIKS3_TOKEN" > "$RUNNER_TEMP/niks3.token"
+
+    - name: build and push
+      shell: bash
+      env:
+        CACHE_URL: ${{ inputs.cache_url }}
+        INSTALLABLES: ${{ inputs.installables }}
+        NIX_FLAGS: ${{ inputs.nix_flags }}
+        PUSH_INPUTS: ${{ inputs.push_inputs }}
+      run: |
+        set -euo pipefail
+        NIKS3="$(nix build nixpkgs#niks3 --no-link --print-out-paths)/bin/niks3"
+        TOKEN_SCRIPT="${{ steps.niks3.outputs.auth-token-script }}"
+        if [ -s "$RUNNER_TEMP/niks3.token" ]; then
+          AUTH=(--auth-token-path "$RUNNER_TEMP/niks3.token")
+        elif [ -n "$TOKEN_SCRIPT" ]; then
+          AUTH=(--auth-token-script "$TOKEN_SCRIPT")
+        else
+          AUTH=()
+        fi
+        rc=0
+
+        echo "::group::nix build"
+        df -h / | tail -1
+        free -m | head -2
+
+        # nix 的 stderr 同步写日志文件 (语句重定向, 无竞态), 同时由后台 tail -f 实时吐进 CI 日志;
+        # 只用行改向时 runner 被外部终止就什么都看不到, 故不能省掉 tail.
+        log="$RUNNER_TEMP/build.err"
+        : > "$log"
+        tail -n +1 -f "$log" &
+        tail_pid=$!
+
+        attempt=1
+        max_attempts=3
+        while :; do
+          rc=0
+          : > "$log"
+          # shellcheck disable=SC2086
+          nix build --keep-going --show-trace --no-link --print-out-paths $NIX_FLAGS $INSTALLABLES \
+            > "$RUNNER_TEMP/paths" 2>> "$log" || rc=$?
+          if [ "$rc" = 0 ]; then break; fi
+          sleep 1
+          echo "nix build 退出码 $rc (第 $attempt 次)"
+          df -h / | tail -1
+          free -m | head -2
+          sudo dmesg --ctime 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -5 || true
+          if [ "$attempt" -ge "$max_attempts" ] \
+            || ! grep -qE "unable to download|Stream error|HTTP error|could not be realised|no substituter that can build it|Connection reset|timed out" "$RUNNER_TEMP/build.err"; then
+            break
+          fi
+          attempt=$((attempt + 1))
+          echo "瞬时的下载/替身失败, 第 $attempt 次重试 (最多 $max_attempts 次)"
+          sleep 30
+        done
+        sleep 1
+        kill "$tail_pid" 2>/dev/null || true
+        wait "$tail_pid" 2>/dev/null || true
+        echo "::endgroup::"
+
+        # 构建产物一律交给 action 的 post-build-hook 上传, 这里不再重复推: 两个 matrix job 会对同一批
+        # store path 并发推同一个 NAR, niks3 会 abort 败方的 multipart upload, 败方 part PUT 就吃 R2 的
+        # 404 NoSuchUpload, 整条 push 变 fatal.
+        if [ "$PUSH_INPUTS" = "true" ] && [ "${#AUTH[@]}" -gt 0 ]; then
+          mapfile -t inputs < <(nix flake archive --json \
+            | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
+          if [ "${#inputs[@]}" -gt 0 ]; then
+            "$NIKS3" push --server-url "$CACHE_URL" "${AUTH[@]}" "${inputs[@]}" || true
+          fi
+        fi
+
+        df -h / | tail -1
+        exit "$rc"
