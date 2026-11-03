@@ -29,12 +29,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
-          cache_url: ${{ vars.NIKS3_URL }}
+          cache_url: ${{ secrets.NIKS3_URL }}
           cache_token: ${{ secrets.NIKS3_TOKEN }}
       - id: plan
         uses: ./.github/actions/plan
         with:
-          cache_url: ${{ vars.NIKS3_URL }}
+          cache_url: ${{ secrets.NIKS3_URL }}
 
   build:
     name: ${{ matrix.label }}
@@ -50,7 +50,7 @@ jobs:
       - uses: jlumbroso/free-disk-space@v2
       - uses: ./.github/actions/setup
         with:
-          cache_url: ${{ vars.NIKS3_URL }}
+          cache_url: ${{ secrets.NIKS3_URL }}
           cache_token: ${{ secrets.NIKS3_TOKEN }}
           substituters: ${{ matrix.extra-substituters }}
           trusted_keys: ${{ matrix.extra-keys }}
@@ -58,7 +58,7 @@ jobs:
         env:
           NIKS3_TOKEN: ${{ secrets.NIKS3_TOKEN }}
         with:
-          cache_url: ${{ vars.NIKS3_URL }}
+          cache_url: ${{ secrets.NIKS3_URL }}
           installables: ${{ matrix.installables }}
           nix_flags: ${{ matrix.nix-flags }}
           push_inputs: ${{ github.event_name == 'workflow_dispatch' || contains(toJSON(github.event.commits), 'flake.lock') }}

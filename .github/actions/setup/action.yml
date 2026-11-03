@@ -30,7 +30,11 @@ runs:
         CACHE_URL: ${{ inputs.cache_url }}
       run: |
         set -euo pipefail
-        printf 'host=%s\n' "$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')" >> "$GITHUB_OUTPUT"
+        host=$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')
+        # 端点值来自 secret, GitHub 只掩掉完整串 (含 scheme), 裸主机名要自己掩, 否则
+        # netrc / nix.conf / nix 的 warning 里会原样打出主机名.
+        echo "::add-mask::$host"
+        printf 'host=%s\n' "$host" >> "$GITHUB_OUTPUT"
 
     - name: write cache netrc
       if: ${{ inputs.cache_token != '' }}
