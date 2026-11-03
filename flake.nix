@@ -17,6 +17,11 @@
       url = "github:nix-community/home-manager/master";
       inputs.nixpkgs.follows = "nixpkgs-stable";
     };
+    ## --- Cache ---
+    niks3 = {
+      url = "github:Mic92/niks3";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
     ## --- Nur ---
     nur.url = "github:nix-community/NUR";
     ## --- Applications ---

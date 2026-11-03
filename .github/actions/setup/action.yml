@@ -2,60 +2,18 @@ name: setup
 description: "缓存 CI 的前置环境"
 
 inputs:
-  token:
-    description: "attic 的 token"
-    required: true
-  url:
-    description: "缓存服务地址 (带协议, 不含缓存名)"
-    required: true
-  hosts_entry:
-    description: "Hosts (源站 IP + 域名)"
-    required: true
   substituters:
-    description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+    description: "额外 substituters (缓存本身由 niks3-action 从 /api/cache-config 配)"
     required: false
     default: ""
   trusted_keys:
-    description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
+    description: "额外 trusted public keys"
     required: false
     default: ""
 
 runs:
   using: composite
   steps:
-    - name: pin origin, write credentials
-      shell: bash
-      env:
-        ATTIC_TOKEN: ${{ inputs.token }}
-        ATTIC_URL: ${{ inputs.url }}
-        HOSTS_ENTRY: ${{ inputs.hosts_entry }}
-      run: |
-        set -euo pipefail
-        test -n "$ATTIC_TOKEN"
-        test -n "$ATTIC_URL"
-        test -n "$HOSTS_ENTRY"
-
-        host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
-        echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
-        getent hosts "$host" >/dev/null
-        echo "origin pinned for $host"
-
-        sudo mkdir -p /etc/nix
-        umask 077
-        printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
-        sudo chmod 600 /etc/nix/netrc
-
-        mkdir -p "$HOME/.config/attic"
-        umask 077
-        cat > "$HOME/.config/attic/config.toml" <<EOF
-        default-server = "ci"
-
-        [servers.ci]
-        endpoint = "${ATTIC_URL}"
-        token = "${ATTIC_TOKEN}"
-        EOF
-        chmod 600 "$HOME/.config/attic/config.toml"
-
     - name: install nix
       uses: NixOS/nix-installer-action@main
       with:
@@ -77,4 +35,3 @@ runs:
           fallback = true
           extra-substituters = ${{ inputs.substituters }}
           extra-trusted-public-keys = ${{ inputs.trusted_keys }}
-          netrc-file = /etc/nix/netrc

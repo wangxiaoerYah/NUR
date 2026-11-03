@@ -30,6 +30,7 @@ let
     }
     .${a} or null;
   isGui = n: builtins.elem "gui" (meta.${n}.TAG or [ ]);
+  isCache = n: builtins.elem "cache" (meta.${n}.TAG or [ ]);
   arches = [
     "x86_64-linux"
     "aarch64-linux"
@@ -57,7 +58,8 @@ let
     { arch, only }:
     let
       selected = builtins.filter (
-        n: (only == [ ] || builtins.elem n only) && (arch == "" || arch == archOf n) && runnerOf (archOf n) != null
+        n:
+        (only == [ ] || builtins.elem n only) && (arch == "" || arch == archOf n) && runnerOf (archOf n) != null && !isCache n
       ) hosts;
       singles = map (n: mkEntry [ n ]) (builtins.filter isGui selected);
       groups = lib.concatMap (

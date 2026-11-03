@@ -12,28 +12,28 @@ on:
         required: false
         type: string
         default: ""
-    secrets:
-      attic_token:
-        description: "attic 的 ci token (pull + push)"
+      cache_url:
+        description: "niks3 server URL (从 /api/cache-config 取 substituter 与公钥)"
         required: true
-      attic_url:
-        description: "缓存服务地址 (带协议, 不含缓存名)"
-        required: true
-      cache_name:
-        description: "推送的目标缓存名"
-        required: true
-      hosts_entry:
-        description: "Hosts (源站 IP + 域名)"
-        required: true
+        type: string
       substituters:
-        description: "extra-substituters 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        description: "额外 substituters (可选)"
         required: false
+        type: string
+        default: ""
       trusted_keys:
-        description: "extra-trusted-public-keys 基础值 (各矩阵条目的 extra- 会追加在后面)"
+        description: "额外 trusted public keys (可选)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      niks3_token:
+        description: "读侧门控用的静态 token (写被门控时也需要它来拉取; 空 = 只靠 cache.nixos.org)"
         required: false
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build:
@@ -46,7 +46,7 @@ jobs:
     env:
       INSTALLABLES: ${{ matrix.installables }}
       NIX_FLAGS: ${{ matrix.nix-flags }}
-      CACHE: ci:${{ secrets.cache_name }}
+      CACHE_URL: ${{ inputs.cache_url }}
       PUSH_INPUTS: ${{ github.event_name == 'workflow_dispatch' || contains(toJSON(github.event.commits), 'flake.lock') }}
     steps:
       - uses: actions/checkout@v7
@@ -56,18 +56,46 @@ jobs:
 
       - uses: wangxiaoerYah/NUR/.github/actions/setup@main
         with:
-          token: ${{ secrets.attic_token }}
-          url: ${{ secrets.attic_url }}
-          hosts_entry: ${{ secrets.hosts_entry }}
-          substituters: ${{ secrets.substituters }} ${{ matrix.extra-substituters }}
-          trusted_keys: ${{ secrets.trusted_keys }} ${{ matrix.extra-keys }}
-      - name: attic client
-        run: nix build nixpkgs#attic-client --no-link --print-out-paths > "$RUNNER_TEMP/attic-path"
+          substituters: ${{ inputs.substituters }} ${{ matrix.extra-substituters }}
+          trusted_keys: ${{ inputs.trusted_keys }} ${{ matrix.extra-keys }}
+
+      # 官方 action: 从 /api/cache-config 取 substituter 与公钥, 注册 post-build-hook 逐条上传,
+      # post 步骤 drain 队列; 推送认证走 GitHub OIDC (不需要长期 token), 也不需要 /etc/hosts 指源站.
+      - id: niks3
+        uses: Mic92/niks3-action@v1
+        with:
+          server-url: ${{ inputs.cache_url }}
+
+      # 读侧是门控的: 构建时的拉取也要带凭据 (access-tokens 走 Bearer, 等价 netrc 的 password).
+      - name: gated read credentials
+        env:
+          NIKS3_TOKEN: ${{ secrets.niks3_token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NIKS3_TOKEN:-}" ]; then
+            echo "::warning::没有 niks3_token, 拉取只靠 cache.nixos.org 兜底"
+            exit 0
+          fi
+          host=$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')
+          echo "access-tokens = $host $NIKS3_TOKEN" | sudo tee -a /etc/nix/nix.conf >/dev/null
+          umask 077
+          printf '%s' "$NIKS3_TOKEN" > "$RUNNER_TEMP/niks3.token"
+
+      - name: niks3 client
+        run: nix build nixpkgs#niks3 --no-link --print-out-paths > "$RUNNER_TEMP/niks3-path"
 
       - name: build and push
         run: |
           set -euo pipefail
-          ATTIC="$(cat "$RUNNER_TEMP/attic-path")/bin/attic"
+          NIKS3="$(cat "$RUNNER_TEMP/niks3-path")/bin/niks3"
+          TOKEN_SCRIPT="${{ steps.niks3.outputs.auth-token-script }}"
+          if [ -s "$RUNNER_TEMP/niks3.token" ]; then
+            AUTH=(--auth-token-path "$RUNNER_TEMP/niks3.token")
+          elif [ -n "$TOKEN_SCRIPT" ]; then
+            AUTH=(--auth-token-script "$TOKEN_SCRIPT")
+          else
+            AUTH=()
+          fi
           rc=0
 
           echo "::group::nix build"
@@ -116,16 +144,18 @@ jobs:
               | jq -r 'to_entries[] | select(.value != null) | .key' || true)
           fi
 
-          if [ "${#valid[@]}" -gt 0 ]; then
+          # action 的 post-build-hook 已经逐条推过; 这里补推一次是幂等的兜底 (hook 在非 trusted-user
+          # runner 上退化成事后扫描, 且被取消的 job 走不到 post 步骤).
+          if [ "${#valid[@]}" -gt 0 ] && [ "${#AUTH[@]}" -gt 0 ]; then
             echo "pushing ${#valid[@]} paths"
-            "$ATTIC" push "$CACHE" "${valid[@]}"
+            "$NIKS3" push --server-url "$CACHE_URL" "${AUTH[@]}" "${valid[@]}"
           fi
 
-          if [ "$PUSH_INPUTS" = "true" ]; then
+          if [ "$PUSH_INPUTS" = "true" ] && [ "${#AUTH[@]}" -gt 0 ]; then
             mapfile -t inputs < <(nix flake archive --json \
               | jq -r '[.. | objects | select(has("path")) | .path] | unique[]' || true)
             if [ "${#inputs[@]}" -gt 0 ]; then
-              "$ATTIC" push "$CACHE" "${inputs[@]}" || true
+              "$NIKS3" push --server-url "$CACHE_URL" "${AUTH[@]}" "${inputs[@]}" || true
             fi
           fi
 

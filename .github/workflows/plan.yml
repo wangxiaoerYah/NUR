@@ -8,19 +8,18 @@ on:
         required: false
         type: string
         default: ""
+      cache_url:
+        description: "niks3 server URL; 空 = 跳过缓存新鲜度检查, 全部进矩阵"
+        required: false
+        type: string
+        default: ""
     outputs:
       matrix:
         description: "json: {include: [{label, runner, installables}]}; 全部产物已在缓存时为 {include:[]}"
         value: ${{ jobs.plan.outputs.matrix }}
     secrets:
-      attic_token:
-        description: "attic ci token (拉取用); 空 = 跳过缓存新鲜度检查 (fork PR 场景)"
-        required: false
-      substituter:
-        description: "要检查的缓存 URL (https://<host>/<cache>); 空 = 跳过检查, 全部进矩阵"
-        required: false
-      hosts_entry:
-        description: "Hosts (源站 IP + 域名)"
+      niks3_token:
+        description: "读侧门控的 token (拉取用); 空 = 跳过缓存新鲜度检查 (fork PR 场景)"
         required: false
 
 permissions:
@@ -37,26 +36,20 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: pin origin, write netrc
+      - name: write netrc for gated reads
         shell: bash
         env:
-          ATTIC_TOKEN: ${{ secrets.attic_token }}
-          HOSTS_ENTRY: ${{ secrets.hosts_entry }}
+          NIKS3_TOKEN: ${{ secrets.niks3_token }}
+          CACHE_URL: ${{ inputs.cache_url }}
         run: |
           set -euo pipefail
-          if [ -n "$HOSTS_ENTRY" ]; then
-            host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
-            echo "$HOSTS_ENTRY" | sudo tee -a /etc/hosts >/dev/null
-            getent hosts "$host" >/dev/null
-          fi
           sudo mkdir -p /etc/nix
           umask 077
           sudo touch /etc/nix/netrc
           sudo chmod 600 /etc/nix/netrc
-          if [ -n "$ATTIC_TOKEN" ] && [ -n "$HOSTS_ENTRY" ]; then
-            host=$(printf '%s' "$HOSTS_ENTRY" | awk '{print $2}')
-            printf 'machine %s login nix password %s\n' "$host" "$ATTIC_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
-            sudo chmod 600 /etc/nix/netrc
+          if [ -n "$NIKS3_TOKEN" ] && [ -n "$CACHE_URL" ]; then
+            host=$(printf '%s' "$CACHE_URL" | sed -E 's#^https?://##; s#/.*##')
+            printf 'machine %s login nix password %s\n' "$host" "$NIKS3_TOKEN" | sudo tee /etc/nix/netrc >/dev/null
           fi
 
       - uses: NixOS/nix-installer-action@main
@@ -68,7 +61,7 @@ jobs:
 
       - id: m
         env:
-          SUBSTITUTER: ${{ secrets.substituter }}
+          CACHE_URL: ${{ inputs.cache_url }}
         run: |
           set -euo pipefail
           entries=()
@@ -79,7 +72,7 @@ jobs:
 
             installables=""
             while IFS=$'\t' read -r name path; do
-              if [ -n "$SUBSTITUTER" ] && nix path-info --store "$SUBSTITUTER" "$path" >/dev/null 2>&1; then
+              if [ -n "$CACHE_URL" ] && nix path-info --store "$CACHE_URL" "$path" >/dev/null 2>&1; then
                 echo "cached: $name"
               else
                 installables="$installables .#$name"

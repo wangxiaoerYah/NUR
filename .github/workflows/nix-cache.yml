@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: nix-cache-${{ github.ref }}
@@ -21,10 +22,10 @@ concurrency:
 jobs:
   plan:
     uses: ./.github/workflows/plan.yml
+    with:
+      cache_url: ${{ vars.NIKS3_URL }}
     secrets:
-      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
-      substituter: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
-      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
+      niks3_token: ${{ secrets.NIKS3_TOKEN }}
 
   build:
     name: build
@@ -33,10 +34,6 @@ jobs:
     uses: ./.github/workflows/build-push.yml
     with:
       matrix: ${{ needs.plan.outputs.matrix }}
+      cache_url: ${{ vars.NIKS3_URL }}
     secrets:
-      attic_token: ${{ secrets.ATTIC_CI_TOKEN }}
-      attic_url: ${{ secrets.ATTIC_URL }}
-      cache_name: ${{ secrets.ATTIC_CACHE }}
-      hosts_entry: ${{ secrets.ATTIC_HOSTS_ENTRY }}
-      substituters: ${{ secrets.ATTIC_URL }}/${{ secrets.ATTIC_CACHE }}
-      trusted_keys: ${{ secrets.ATTIC_PUBLIC_KEY }}
+      niks3_token: ${{ secrets.NIKS3_TOKEN }}

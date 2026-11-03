@@ -46,7 +46,12 @@ let
       meta = hostLib.hostsMeta;
       names = builtins.attrNames meta;
       keys = builtins.fromJSON (builtins.readFile (root + "/secrets/keys.json"));
-      rules = builtins.attrNames (import (root + "/secrets/secrets.nix"));
+      rulesFile =
+        if builtins.pathExists (root + "/secrets/agenix-rules.nix") then
+          root + "/secrets/agenix-rules.nix"
+        else
+          root + "/secrets/secrets.nix";
+      rules = builtins.attrNames (import rulesFile);
 
       validName = n: builtins.match "[a-z0-9]?([a-z0-9-]*[a-z0-9])?" n != null;
       badNames = builtins.filter (n: !validName n) names;
@@ -66,8 +71,10 @@ let
         (map (h: "vnet 主机 ${h} 缺 secrets/${ruleOf h}") (
           builtins.filter (h: !builtins.pathExists (root + "/secrets/${ruleOf h}")) vnetHosts
         ))
-        ++ (map (h: "vnet 主机 ${h} 在 secrets.nix 里没有规则 (它解不开别人的密钥)") (builtins.filter (h: !lib.elem (ruleOf h) rules) vnetHosts))
-        ++ (map (r: "secrets.nix 残留规则 ${r} (对应主机已不是 vnet 或已不在 hosts/)") (
+        ++ (map (h: "vnet 主机 ${h} 在 agenix-rules.nix 里没有规则 (它解不开别人的密钥)") (
+          builtins.filter (h: !lib.elem (ruleOf h) rules) vnetHosts
+        ))
+        ++ (map (r: "agenix-rules.nix 残留规则 ${r} (对应主机已不是 vnet 或已不在 hosts/)") (
           builtins.filter (
             r:
             let
