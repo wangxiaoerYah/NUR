@@ -40,6 +40,28 @@ let
       ];
     };
 
+  initrdModuleFaults =
+    let
+      isNixpkgs = file: lib.hasInfix "/nixos/modules/" (toString file);
+      namesOf = v: if builtins.isList v then v else lib.attrNames (lib.filterAttrs (_: x: x == true) v);
+      defsOf = cfg: cfg.options.boot.initrd.availableKernelModules.definitionsWithLocations or [ ];
+      defaultsOf =
+        defs: lib.unique (lib.concatMap (d: namesOf (d.value or [ ])) (builtins.filter (d: isNixpkgs d.file) defs));
+      faultsOf =
+        name: cfg:
+        let
+          defs = defsOf cfg;
+          defaults = defaultsOf defs;
+          dups = d: lib.intersectLists (namesOf (d.value or [ ])) defaults;
+          bad = map (d: {
+            file = toString d.file;
+            dups = dups d;
+          }) (builtins.filter (d: !isNixpkgs d.file && dups d != [ ]) defs);
+        in
+        map (b: "主机 ${name}: ${b.file} 重复列了默认集已含的 initrd 模块 (${lib.concatStringsSep ", " b.dups}); 删掉这行即可") bad;
+    in
+    lib.concatLists (lib.mapAttrsToList faultsOf (config.flake.nixosConfigurations or { }));
+
   storePathFaults =
     let
       srcPrefix = toString fleet.src + "/";
@@ -444,6 +466,22 @@ ${lib.concatStringsSep "\n" layoutFaults}"
           ''
         );
   };
+  initrdModuleChecks = pkgs: {
+    initrd-no-duplicate-modules =
+      builtins.seq
+        (
+          if initrdModuleFaults == [ ] then
+            true
+          else
+            throw "initrd 模块表抄了 nixpkgs 默认集 (默认集已打进 initramfs, 重复列只会误导):
+${lib.concatStringsSep "\n" initrdModuleFaults}"
+        )
+        (
+          pkgs.runCommand "check-initrd-no-duplicate-modules" { } ''
+            touch $out
+          ''
+        );
+  };
   storePathChecks = pkgs: {
     store-path-normalized =
       builtins.seq
@@ -485,6 +523,7 @@ in
       // layoutChecks pkgs
       // inventoryChecks pkgs
       // storePathChecks pkgs
+      // initrdModuleChecks pkgs
       // lib.mapAttrs' (name: sc: lib.nameValuePair "gpu-${name}" (mkCheck pkgs (sc.meta.hostPlatform or system) name sc)) (
         lib.filterAttrs (_: sc: (sc.meta.hostPlatform or system) == system) scenarios
       )
