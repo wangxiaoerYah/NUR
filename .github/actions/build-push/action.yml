@@ -26,6 +26,9 @@ runs:
       uses: Mic92/niks3-action@v1
       with:
         server-url: ${{ inputs.cache_url }}
+        # 闭包变大后(desktop 22.9GiB)收尾时上传队列需要更久; 上传用的 presigned URL 有效期是
+        # 服务端硬编码 5h (server/pending_closure.go 的 maxSignedURLDuration), 30min 远在其内.
+        drain-timeout: 1800
 
     # 读侧门控的凭据由调用方在 env 里给 (composite action 拿不到 secrets 上下文);
     # 这里只把同一把 token 落成文件, 给下面的显式 push 用.
