@@ -13,7 +13,25 @@ let
       builtins.readDir "${projectRoot}/hosts"
     )
   );
-  hostsMeta = lib.genAttrs hostNames (name: import "${projectRoot}/hosts/${name}/meta.nix");
+  # 事实文件过一遍 meta schema (mod/lib/meta-schema.nix): 字段名拼错 / 类型不符 / 未知字段
+  # 都由 module 系统在求值期报错, 默认值也由 schema 给.
+  evalMeta =
+    name:
+    (lib.evalModules {
+      modules = [
+        (import "${projectRoot}/mod/lib/meta-schema.nix" { inherit lib; })
+        (import "${projectRoot}/hosts/${name}/meta.nix")
+      ];
+    }).config;
+  # framework scenario (flake-checks 的 mkCheck) 用裸 meta, 也补一遍默认值, 写死的 attrs 不能靠 schema.
+  withMetaDefaults =
+    m:
+    let
+      schema = import "${projectRoot}/mod/lib/meta-schema.nix" { inherit lib; };
+      defaults = lib.mapAttrs (_: o: o.default or null) schema.options;
+    in
+    defaults // m;
+  hostsMeta = lib.genAttrs hostNames evalMeta;
 
   globalConfig = import (projectRoot + "/mod/lib/global-config.nix");
   modLib = import "${projectRoot}/mod/lib" { inherit lib projectRoot; };

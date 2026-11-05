@@ -65,4 +65,8 @@ let
         )
       ) (builtins.filter (n: (builtins.readDir dir).${n} == "directory") (builtins.attrNames (builtins.readDir dir)));
 in
-builtins.concatMap walk dirs ++ (if builtins.elem "hosts" dirs then hostFaults else [ ])
+builtins.concatMap walk dirs
+++ (if builtins.elem "hosts" dirs then hostFaults ++ (import ./layout-rule-host-files.nix { inherit root; }) else [ ])
+++ (import ./layout-rule-top-dirs.nix { inherit lib root; })
+++ (import ./layout-rule-data-dirs.nix { inherit root; })
+++ (import ./layout-rule-lib-purity.nix { inherit lib root; })
