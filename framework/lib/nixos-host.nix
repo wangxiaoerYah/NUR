@@ -23,14 +23,6 @@ let
         (import "${projectRoot}/hosts/${name}/meta.nix")
       ];
     }).config;
-  # framework scenario (flake-checks 的 mkCheck) 用裸 meta, 也补一遍默认值, 写死的 attrs 不能靠 schema.
-  withMetaDefaults =
-    m:
-    let
-      schema = import "${projectRoot}/mod/lib/meta-schema.nix" { inherit lib; };
-      defaults = lib.mapAttrs (_: o: o.default or null) schema.options;
-    in
-    defaults // m;
   hostsMeta = lib.genAttrs hostNames evalMeta;
 
   globalConfig = import (projectRoot + "/mod/lib/global-config.nix");
