@@ -385,15 +385,13 @@ let
       cfg =
         (hostLib.mkHost {
           inherit name meta metaSet;
-          extraModules = [
-            { mod.net.useDHCP = true; }
-          ]
-          ++ (sc.modules or [ ])
-          ++ lib.optional (sc ? gpu) {
-            mod.hardware.gpu = sc.gpu // {
-              enable = true;
+          extraModules =
+            (sc.modules or [ ])
+            ++ lib.optional (sc ? gpu) {
+              mod.hardware.gpu = sc.gpu // {
+                enable = true;
+              };
             };
-          };
         }).config;
 
       assertionsOk = lib.all (a: a.assertion) cfg.assertions;
