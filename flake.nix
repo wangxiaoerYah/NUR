@@ -25,6 +25,7 @@
     ## --- Nur ---
     nur.url = "github:nix-community/NUR";
     ## --- Applications ---
+    omp.url = "github:can1357/oh-my-pi";
     nix-index-database = {
       url = "github:nix-community/nix-index-database";
       inputs.nixpkgs.follows = "nixpkgs-stable";
